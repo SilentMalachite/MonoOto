@@ -1,0 +1,54 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+		54D5F5792E376EF9B3B82FC9 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/MonoOtoApp.swift"; sourceTree = "<group>"; };
+		EA421144026626017C517B3F = { isa = PBXBuildFile; fileRef = 54D5F5792E376EF9B3B82FC9; };
+		D6DFBFCDF60A1CEA5392F2C0 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/PlayerView.swift"; sourceTree = "<group>"; };
+		FA7A9C86E776570F3FB7F442 = { isa = PBXBuildFile; fileRef = D6DFBFCDF60A1CEA5392F2C0; };
+		BF7D0059C36EFA3E856E6A55 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/MonoOtoCoreTests/PlaybackStateTests.swift"; sourceTree = "<group>"; };
+		F191789379728EB27716A50B = { isa = PBXBuildFile; fileRef = BF7D0059C36EFA3E856E6A55; };
+		02C2758958AA581F69252661 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/MonoOtoAudioTests/DeviceOutputTests.swift"; sourceTree = "<group>"; };
+		56FD48A4C3C7C16AA0E44B0E = { isa = PBXBuildFile; fileRef = 02C2758958AA581F69252661; };
+		A10000000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/MonoOtoCoreTests/AudioFilePipelineTests.swift"; sourceTree = "<group>"; };
+		A10000000000000000000002 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/MonoOtoCoreTests/EncoderTests.swift"; sourceTree = "<group>"; };
+		A10000000000000000000003 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/MonoOtoCoreTests/OutputGuardTests.swift"; sourceTree = "<group>"; };
+		B10000000000000000000001 = { isa = PBXBuildFile; fileRef = A10000000000000000000001; };
+		B10000000000000000000002 = { isa = PBXBuildFile; fileRef = A10000000000000000000002; };
+		B10000000000000000000003 = { isa = PBXBuildFile; fileRef = A10000000000000000000003; };
+		8BCD5BC4CDFDF0918087C782 = { isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MonoOto.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F219C0274590DA45E4BEF1EA = { isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MonoOtoHostTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		FBDC4F23F93125BBEEAE800C = { isa = PBXGroup; children = (8BCD5BC4CDFDF0918087C782, F219C0274590DA45E4BEF1EA,); name = Products; sourceTree = "<group>"; };
+		F97E10D1020E3BEF961AF77B = { isa = PBXGroup; children = (54D5F5792E376EF9B3B82FC9, D6DFBFCDF60A1CEA5392F2C0, BF7D0059C36EFA3E856E6A55, 02C2758958AA581F69252661, A10000000000000000000001, A10000000000000000000002, A10000000000000000000003, FBDC4F23F93125BBEEAE800C,); sourceTree = "<group>"; };
+		C27E4B6BEEEBEE564F55E421 = { isa = XCLocalSwiftPackageReference; relativePath = .; };
+		82C6AA05EF2FD22604EA1A72 = { isa = XCSwiftPackageProductDependency; productName = MonoOtoCore; };
+		1CBD0EBC28D259B0319E32B5 = { isa = PBXBuildFile; productRef = 82C6AA05EF2FD22604EA1A72; };
+		D943DEDD0F6BAFB8356790BE = { isa = XCSwiftPackageProductDependency; productName = MonoOtoAudio; };
+		3C47DC394BECD4A52EB22118 = { isa = PBXBuildFile; productRef = D943DEDD0F6BAFB8356790BE; };
+		971ED9D05B25DB6C4D7680D4 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (EA421144026626017C517B3F, FA7A9C86E776570F3FB7F442,); runOnlyForDeploymentPostprocessing = 0; };
+		78AE8C6BEB2A40A6D824CCEE = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (1CBD0EBC28D259B0319E32B5, 3C47DC394BECD4A52EB22118,); runOnlyForDeploymentPostprocessing = 0; };
+		364863F9F2E558B0F50473FC = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		C13732C8E715C9BEE4FA51C9 = { isa = PBXNativeTarget; buildConfigurationList = 8A8642C6B28662881237D956; buildPhases = (971ED9D05B25DB6C4D7680D4, 78AE8C6BEB2A40A6D824CCEE, 364863F9F2E558B0F50473FC,); buildRules = (); dependencies = (); name = MonoOto; packageProductDependencies = (82C6AA05EF2FD22604EA1A72, D943DEDD0F6BAFB8356790BE,); productName = MonoOto; productReference = 8BCD5BC4CDFDF0918087C782; productType = "com.apple.product-type.application"; };
+		8A541B461610A518B4A527F8 = { isa = XCSwiftPackageProductDependency; productName = MonoOtoCore; };
+		B0AD7560DD90869F17D9AD3E = { isa = PBXBuildFile; productRef = 8A541B461610A518B4A527F8; };
+		190512B372C676361346630D = { isa = XCSwiftPackageProductDependency; productName = MonoOtoAudio; };
+		E01BA76B29A7396AF0B9CE2F = { isa = PBXBuildFile; productRef = 190512B372C676361346630D; };
+		87578F7D47DE44A504256C73 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (F191789379728EB27716A50B, 56FD48A4C3C7C16AA0E44B0E, B10000000000000000000001, B10000000000000000000002, B10000000000000000000003,); runOnlyForDeploymentPostprocessing = 0; };
+		32BD75FE04B3CDF992A510FD = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (B0AD7560DD90869F17D9AD3E, E01BA76B29A7396AF0B9CE2F,); runOnlyForDeploymentPostprocessing = 0; };
+		1544DFBBD36E4A0D68754A27 = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		EB441FB4F42650CB3146523A = { isa = PBXNativeTarget; buildConfigurationList = 543C3B0A949D06459825C125; buildPhases = (87578F7D47DE44A504256C73, 32BD75FE04B3CDF992A510FD, 1544DFBBD36E4A0D68754A27,); buildRules = (); dependencies = (); name = MonoOtoHostTests; packageProductDependencies = (8A541B461610A518B4A527F8, 190512B372C676361346630D,); productName = MonoOtoHostTests; productReference = F219C0274590DA45E4BEF1EA; productType = "com.apple.product-type.bundle.unit-test"; };
+		89E1FD6268CC0F221A2BE178 = { isa = XCBuildConfiguration; buildSettings = { MACOSX_DEPLOYMENT_TARGET = 14.2; SDKROOT = macosx; ARCHS = arm64; SWIFT_VERSION = 6.0; CLANG_ENABLE_MODULES = YES; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; ENABLE_TESTABILITY = YES; DEBUG_INFORMATION_FORMAT = dwarf; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;  }; name = Debug; };
+		E6DE6C99132752C914FEF632 = { isa = XCBuildConfiguration; buildSettings = { MACOSX_DEPLOYMENT_TARGET = 14.2; SDKROOT = macosx; ARCHS = arm64; SWIFT_VERSION = 6.0; CLANG_ENABLE_MODULES = YES; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_OPTIMIZATION_LEVEL = "-O"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";  }; name = Release; };
+		49EA05A46B1A86EA7E413B43 = { isa = XCConfigurationList; buildConfigurations = (89E1FD6268CC0F221A2BE178, E6DE6C99132752C914FEF632,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		E9B2E96ABC5F6856F2BE79CF = { isa = XCBuildConfiguration; buildSettings = { MACOSX_DEPLOYMENT_TARGET = 14.2; SDKROOT = macosx; ARCHS = arm64; SWIFT_VERSION = 6.0; CLANG_ENABLE_MODULES = YES; PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = local.MonoOto; INFOPLIST_FILE = App/Info.plist; CODE_SIGN_STYLE = Automatic; CODE_SIGN_IDENTITY = "-"; COMBINE_HIDPI_IMAGES = YES; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";  }; name = Debug; };
+		5A8C91857F674E16E2724F47 = { isa = XCBuildConfiguration; buildSettings = { MACOSX_DEPLOYMENT_TARGET = 14.2; SDKROOT = macosx; ARCHS = arm64; SWIFT_VERSION = 6.0; CLANG_ENABLE_MODULES = YES; PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = local.MonoOto; INFOPLIST_FILE = App/Info.plist; CODE_SIGN_STYLE = Automatic; CODE_SIGN_IDENTITY = "-"; COMBINE_HIDPI_IMAGES = YES; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";  }; name = Release; };
+		8A8642C6B28662881237D956 = { isa = XCConfigurationList; buildConfigurations = (E9B2E96ABC5F6856F2BE79CF, 5A8C91857F674E16E2724F47,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		0F3D67935A4F199E058A017A = { isa = XCBuildConfiguration; buildSettings = { MACOSX_DEPLOYMENT_TARGET = 14.2; SDKROOT = macosx; ARCHS = arm64; SWIFT_VERSION = 6.0; CLANG_ENABLE_MODULES = YES; PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = local.MonoOto.HostTests; GENERATE_INFOPLIST_FILE = YES; CODE_SIGN_STYLE = Automatic; CODE_SIGN_IDENTITY = "-"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @loader_path/../Frameworks";  }; name = Debug; };
+		20B70E15FDC36C625E57F658 = { isa = XCBuildConfiguration; buildSettings = { MACOSX_DEPLOYMENT_TARGET = 14.2; SDKROOT = macosx; ARCHS = arm64; SWIFT_VERSION = 6.0; CLANG_ENABLE_MODULES = YES; PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = local.MonoOto.HostTests; GENERATE_INFOPLIST_FILE = YES; CODE_SIGN_STYLE = Automatic; CODE_SIGN_IDENTITY = "-"; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @loader_path/../Frameworks";  }; name = Release; };
+		543C3B0A949D06459825C125 = { isa = XCConfigurationList; buildConfigurations = (0F3D67935A4F199E058A017A, 20B70E15FDC36C625E57F658,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		98F54143AB4E86B28C3AFEE0 = { isa = PBXProject; attributes = { BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 2660; }; buildConfigurationList = 49EA05A46B1A86EA7E413B43; compatibilityVersion = "Xcode 14.0"; developmentRegion = ja; hasScannedForEncodings = 0; knownRegions = (ja, en, Base,); mainGroup = F97E10D1020E3BEF961AF77B; packageReferences = (C27E4B6BEEEBEE564F55E421,); productRefGroup = FBDC4F23F93125BBEEAE800C; projectDirPath = ""; projectRoot = ""; targets = (C13732C8E715C9BEE4FA51C9, EB441FB4F42650CB3146523A,); };
+	};
+	rootObject = 98F54143AB4E86B28C3AFEE0;
+}
