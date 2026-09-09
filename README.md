@@ -23,8 +23,10 @@ Still incomplete:
 
 - the bounded real-time queue and file-playback controller;
 - normal playback, pause, seek, ear selection, and listening-comparison UI;
-- hardware verification of device pinning, disconnect handling, callback shutdown, and macOS 14.2;
+- macOS 14.2 hardware execution, wider device coverage, and the 60-minute integrated playback test;
 - perceptual evaluation with the intended listener.
+
+As of 2026-09-10, Tasks 1–4 have been implemented and verified within the recorded macOS / Apple Silicon / USB-device scope. The latest checks passed 75 tests in each of Swift Package and Xcode, plus a Release build. Earlier Task 4 checks covered device changes, sleep, and 44.1/48 kHz render and lifetime behavior. After the latest cancellation and teardown fixes, USB 48 kHz lifetime checks passed again; 44.1 kHz profiling and physical disconnect/sleep tests were not repeated on that revision. See the [verification log](docs/verification/stage-a.md) for conditions and limits. Task 5, the bounded queue, is next and has not started.
 
 The current app host outputs silence only. Selecting a device does not start the audio graph; starting the silent path requires a separate explicit action.
 
@@ -55,6 +57,8 @@ xcodebuild \
 ```
 
 Opening `MonoOto.xcodeproj` in Xcode provides the silent output-device test host. Do not treat a successful build or mocked test as proof that a physical device is pinned or stopped on disconnect.
+
+Output owners should call `stop()` or `dispose()` explicitly when their use ends. Releasing the last owner on the main thread also disposes the backend synchronously. A last release on another thread queues disposal on MainActor; delivered fault events can still stop that backend, but immediate shutdown while MainActor is unavailable is not guaranteed.
 
 ## Repository layout
 

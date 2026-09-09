@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Reproducible Task 4 silent-route probes and diagnostic-only render-lifetime instrumentation, with hardware verification records for USB 44.1/48 kHz.
+
 - Deterministic stereo-to-mono cue encoder with cancellation diagnostics.
 - Common gain ramp and look-ahead output limiter with a −3 dBFS ceiling.
 - WAV and AIFF validation, decoding, conversion, and bounded reads.
@@ -21,6 +23,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - English canonical and Japanese-translated public project documentation.
 
 ### Fixed
+
+- Await the initial engine configuration notification before connecting a different-format route, with a bounded timeout and format readback.
+- Stop previous output for cancelled preparation, reject stale UI tasks, and prioritize cancellation over a queued timeout.
+- Dispose synchronously on main-thread owner release and retain fault handling while off-thread disposal is queued, without retaining the owner or backend through the event handler.
+- Strengthen regression tests for suspended waits, expected error cases, cancellation, and owner-release ordering.
 
 - Preserve readable output devices when another device fails property inspection.
 - Stop and dispose the output backend after device, route, format, sleep, or render-fault notifications.

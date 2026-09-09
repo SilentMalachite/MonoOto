@@ -40,7 +40,7 @@ The package and shared Xcode scheme use these standard commands:
 swift test
 xcodebuild -project MonoOto.xcodeproj \
   -scheme MonoOto \
-  -destination 'platform=macOS' \
+  -destination 'platform=macOS,arch=arm64' \
   test
 ```
 
@@ -55,6 +55,10 @@ Audio render callbacks must not allocate or free memory, wait on locks, perform 
 Treat malformed buffers, graph failures, and NaN/Inf as fail-silent conditions and notify the control side to stop. All playback and comparison paths must pass through the final gain and peak limiter. The unselected output channel must remain zero, and loss of the selected device must stop playback rather than silently switching to another output.
 
 Changes to render-path code require both source-level real-time safety review and appropriate profiling on supported hardware. Release-build inspection alone is not a substitute for runtime measurement.
+
+## Local analysis artifacts
+
+Keep `graphify-out/` and `.ai-collab/` out of commits: they contain generated graphs, caches, machine-specific paths, and review runtime state. They are currently untracked local artifacts, not ignored repository paths; stage intended files explicitly. The reusable scripts under `docs/verification/` are tracked verification sources.
 
 ## Documentation and translations
 
