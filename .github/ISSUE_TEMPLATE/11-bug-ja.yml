@@ -1,0 +1,73 @@
+name: バグ報告（日本語）
+description: MonoOtoで再現できる問題を日本語で報告します
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ご報告ありがとうございます。このフォームは日本語訳で、英語版が正本です。
+
+        脆弱性をここで公開しないでください。`SECURITY.ja.md`に従い、利用できる場合は非公開の脆弱性報告を使用してください。痛み、耳鳴り、違和感、疲労がある場合は再生を中止してください。
+  - type: input
+    id: revision
+    attributes:
+      label: バージョンまたはコミット
+      description: コミットハッシュ、またはビルドを入手した方法を記載してください。
+      placeholder: d6fb24b または mainの最新版
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOSとMac
+      description: macOSのバージョンとMacのモデルまたはチップを記載してください。
+      placeholder: macOS 14.6、Apple M2搭載MacBook Air
+    validations:
+      required: true
+  - type: textarea
+    id: audio_setup
+    attributes:
+      label: 音声環境
+      description: 出力機器、チャンネル構成、サンプルレート、関係するシステム音声設定を記載してください。シリアル番号などの識別子は含めないでください。
+      placeholder: 有線ステレオヘッドホン、48 kHz、macOSのモノラルオーディオは無効
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      description: 確実に再現できる最小限の手順を記載してください。著作物や個人の音声を共有せず、テスト音声は形式で説明してください。
+      placeholder: |
+        1. 停止状態でMonoOtoを起動する。
+        2. ...を選択する。
+        3. ...を実行する。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待する動作
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の動作
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 追加資料
+      description: 個人情報、音声内容、機器識別子、秘密情報、ローカルのフルパスを除去したうえで、関係するログやスクリーンショットを追加してください。
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 確認事項
+      options:
+        - label: 同じ問題が既存Issueにないか検索しました。
+          required: true
+        - label: この報告には、脆弱性の詳細、秘密情報、個人情報、音声内容、ローカルのフルパスを含めていません。
+          required: true

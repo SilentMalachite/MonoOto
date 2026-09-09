@@ -1,0 +1,65 @@
+name: 機能提案（日本語）
+description: MonoOtoへの限定的な改善案を日本語で提案します
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        このフォームは日本語訳で、英語版が正本です。MonoOtoは現在、`SPEC.md`に記載した小さな段階Aの体験を検証しています。望む体験と、推測による聴覚上・医療上の効果を区別してください。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 問題または利用場面
+      description: 具体的な状況と、誰にどのような利点があるかを記載してください。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 提案する動作
+      description: 必要最小限の動作を、音声再生や経路変更の開始条件を含めて記載してください。
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 検討した代替案
+      description: 既存の手順や、より小さい代替案を記載してください。
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: 対象領域
+      options:
+        - 音声処理
+        - 再生と機器管理
+        - UIとアクセシビリティ
+        - 評価と文書
+        - ビルドと開発ツール
+        - その他
+    validations:
+      required: true
+  - type: textarea
+    id: safety_privacy
+    attributes:
+      label: 安全とプライバシーへの影響
+      description: 出力レベル、経路、利用者の明示操作、ローカル音声の扱い、保存データ、権限への影響を記載してください。影響がない場合は「確認できる影響なし」と記載してください。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 根拠資料
+      description: 事実の主張に依存する提案では、一次的な技術資料や研究資料へのリンクを記載してください。著作権のある音声や個人情報は含めないでください。
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 確認事項
+      options:
+        - label: 類似する提案が既存Issueにないか検索しました。
+          required: true
+        - label: 未検証の工学的仮説を、実証済みの聴覚上・医療上の効果として説明していません。
+          required: true

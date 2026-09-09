@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Private vulnerability report / 非公開の脆弱性報告
+    url: https://github.com/SilentMalachite/MonoOto/security/advisories/new
+    about: Use this private form if enabled. If unavailable, open a blank issue requesting a private path without sensitive details. / 利用できない場合は、機密を含めず非公開経路だけを依頼してください。

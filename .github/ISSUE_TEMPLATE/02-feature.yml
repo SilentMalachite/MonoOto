@@ -1,0 +1,65 @@
+name: Feature request
+description: Propose a focused improvement to MonoOto
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        MonoOto is currently validating the small Stage A experience described in `SPEC.md`. Please distinguish a desired experience from an assumed hearing or medical outcome.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: Describe the concrete situation and who would benefit.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful behavior, including what triggers audio playback or changes routing.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe existing workflows or smaller alternatives you considered.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Audio processing
+        - Playback and device handling
+        - User interface and accessibility
+        - Evaluation and documentation
+        - Build and developer tooling
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: safety_privacy
+    attributes:
+      label: Safety and privacy impact
+      description: Explain effects on output level, routing, explicit user control, local audio handling, stored data, or permissions. Write "None known" if there is no effect.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Supporting evidence
+      description: Link primary technical or research sources when the request depends on a factual claim. Do not include copyrighted audio or personal data.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues for a similar request.
+          required: true
+        - label: I have not described an unverified engineering hypothesis as a proven hearing or medical benefit.
+          required: true

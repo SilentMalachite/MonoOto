@@ -1,0 +1,73 @@
+name: Bug report
+description: Report a reproducible problem in MonoOto
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a problem. English is canonical; a Japanese form is also available.
+
+        Do not disclose vulnerabilities here. Follow `SECURITY.md` and use private vulnerability reporting when available. Stop playback if you experience pain, ringing, discomfort, or fatigue.
+  - type: input
+    id: revision
+    attributes:
+      label: Version or commit
+      description: Provide the commit hash or describe how this build was obtained.
+      placeholder: d6fb24b or latest main
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS and Mac
+      description: Include the macOS version and Mac model or chip.
+      placeholder: macOS 14.6, MacBook Air with Apple M2
+    validations:
+      required: true
+  - type: textarea
+    id: audio_setup
+    attributes:
+      label: Audio setup
+      description: Describe the output device, channel layout, sample rate, and relevant system audio settings. Do not include serial numbers or other identifiers.
+      placeholder: Wired stereo headphones, 48 kHz; macOS mono audio disabled
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Give the smallest reliable sequence. Describe test audio by format rather than sharing copyrighted or personal audio.
+      placeholder: |
+        1. Launch MonoOto while stopped.
+        2. Select ...
+        3. Choose ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Additional evidence
+      description: Add relevant logs or screenshots after removing personal information, audio content, device identifiers, secrets, and full local file paths.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: This report does not contain vulnerability details, secrets, personal information, audio content, or full local file paths.
+          required: true
