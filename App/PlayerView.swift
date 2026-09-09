@@ -10,6 +10,8 @@ struct PlayerView: View {
     @State private var devices: [OutputDevice] = []
     @State private var selectedUID = ""
     @State private var message = "停止中"
+    @State private var preparation: PlaybackTicket?
+    @State private var preparationTask: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -77,7 +79,7 @@ struct PlayerView: View {
             HStack {
                 Button("選択機器で無音テストを開始", action: startSilence)
                     .disabled(
-                        output.isRunning ||
+                        output.isRunning || preparation != nil ||
                         !devices.contains(where: { $0.uid == selectedUID && $0.isSupportedForStageA })
                     )
                 Button("停止", action: stop)
@@ -123,30 +125,55 @@ struct PlayerView: View {
     }
 
     private func startSilence() {
+        guard preparation == nil else { return }
         guard let device = devices.first(where: {
             $0.uid == selectedUID && $0.isSupportedForStageA
         }) else { return }
         let ticket = playback.beginPreparation()
-        do {
-            try output.prepare(uid: device.uid, sampleRate: device.sampleRate)
-            guard playback.finishPreparation(ticket) else {
-                abortStart(message: "準備が取り消されたため停止しました。")
-                return
+        preparation = ticket
+        message = "出力機器を準備しています。停止操作で取り消せます。"
+        preparationTask = Task { @MainActor in
+            defer {
+                if preparation == ticket {
+                    preparation = nil
+                    preparationTask = nil
+                }
             }
-            try output.startSilence()
-            guard playback.start(ticket) else {
-                abortStart(message: "開始が取り消されたため停止しました。")
-                return
+            // A queued task invalidated by Stop must not tear down a newer output.
+            guard preparation == ticket else { return }
+            do {
+                try Task.checkCancellation()
+                try await output.prepare(uid: device.uid, sampleRate: device.sampleRate)
+                // A cancelled older preparation must not stop or relabel the current generation.
+                guard preparation == ticket else { return }
+                try Task.checkCancellation()
+                guard playback.finishPreparation(ticket) else {
+                    abortStart(message: "準備が取り消されたため停止しました。")
+                    return
+                }
+                try output.startSilence()
+                guard playback.start(ticket) else {
+                    abortStart(message: "開始が取り消されたため停止しました。")
+                    return
+                }
+                message = "無音テスト中（\(device.name)）"
+            } catch {
+                guard preparation == ticket else { return }
+                if Task.isCancelled {
+                    abortStart(message: "準備が取り消されたため停止しました。")
+                    return
+                }
+                output.stop()
+                playback.stop()
+                message = output.lastError ?? "開始できません。選択機器の接続と形式を確認してください。"
             }
-            message = "無音テスト中（\(device.name)）"
-        } catch {
-            output.stop()
-            playback.stop()
-            message = output.lastError ?? "開始できません。選択機器の接続と形式を確認してください。"
         }
     }
 
     private func stop() {
+        preparationTask?.cancel()
+        preparationTask = nil
+        preparation = nil
         playback.stop()
         output.stop()
         message = "停止中"

@@ -36,8 +36,8 @@ struct DeviceOutputSnapshot {
     var isStereo: Bool
 }
 
-enum DeviceOutputError: LocalizedError {
-    case unavailable, unsupportedFormat, stale, changed, invalidBuffer, osStatus(OSStatus)
+enum DeviceOutputError: LocalizedError, Equatable {
+    case unavailable, unsupportedFormat, stale, changed, invalidBuffer, configurationTimeout, osStatus(OSStatus)
     var errorDescription: String? {
         switch self {
         case .unavailable: "選択した出力機器を利用できません。"
@@ -45,17 +45,77 @@ enum DeviceOutputError: LocalizedError {
         case .stale: "出力機器を確認して、もう一度開始してください。"
         case .changed: "機器・音声構成の変更またはスリープにより停止しました。"
         case .invalidBuffer: "音声バッファの不整合により停止しました。"
+        case .configurationTimeout: "出力機器の初期設定が完了しませんでした。停止状態で機器を確認してください。"
         case .osStatus(let status): "音声出力の確認に失敗しました（OSStatus: \(status)）。"
         }
     }
 }
 
+/// One initial route change may stop/uninitialize AVAudioEngine asynchronously. Wait before
+/// connecting a source or starting hardware; every later configuration notification remains a fault.
+@MainActor final class DeviceConfigurationWait {
+    private var result: Result<Void, Error>?
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var timeoutTask: Task<Void, Never>?
+
+    var isWaiting: Bool { continuation != nil }
+
+    /// Returns false after the first notification or cancellation so additional events are not hidden.
+    func receiveExpectedChange() -> Bool {
+        guard result == nil else { return false }
+        finish(.success(()))
+        return true
+    }
+
+    func wait(timeout: Duration = .seconds(2)) async throws {
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            do {
+                try await withCheckedThrowingContinuation { pending in
+                    if let result { pending.resume(with: result); return }
+                    guard continuation == nil else {
+                        pending.resume(throwing: DeviceOutputError.stale)
+                        return
+                    }
+                    continuation = pending
+                    timeoutTask = Task { @MainActor [weak self] in
+                        do { try await Task.sleep(for: timeout) }
+                        catch { return }
+                        self?.timeOut()
+                    }
+                }
+            } catch {
+                // Cancellation may arrive after timeout resumed us but before this actor runs.
+                try Task.checkCancellation()
+                throw error
+            }
+            try Task.checkCancellation()
+        } onCancel: {
+            Task { @MainActor in self.cancel() }
+        }
+    }
+
+    func cancel() { finish(.failure(CancellationError())) }
+    func timeOut() { finish(.failure(DeviceOutputError.configurationTimeout)) }
+
+    private func finish(_ result: Result<Void, Error>) {
+        guard self.result == nil else { return }
+        self.result = result
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        let pending = continuation
+        continuation = nil
+        pending?.resume(with: result)
+    }
+}
+
 /// The injected boundary replaces hardware operations only; lifecycle and readback validation remain here.
+/// Each backend is exclusively owned by one DeviceOutput; do not share an injected backend between owners.
 @MainActor protocol DeviceOutputBackend: AnyObject, Sendable {
     var callbackCount: UInt64 { get }
     func availableDevices() throws -> [OutputDevice]
     func configure(device: OutputDevice, sampleRate: Double,
-                   onEvent: @escaping @MainActor @Sendable (DeviceOutputEvent) -> Void) throws
+                   onEvent: @escaping @MainActor @Sendable (DeviceOutputEvent) -> Void) async throws
     func snapshot() throws -> DeviceOutputSnapshot
     func start() throws
     func stop()
@@ -79,18 +139,26 @@ enum DeviceOutputError: LocalizedError {
     init(backend: any DeviceOutputBackend) { self.backend = backend }
     deinit {
         let backend = backend
-        Task { @MainActor in backend.dispose() }
+        // On macOS the main thread is MainActor's executor. Avoid leaving live hardware
+        // behind until another task runs when the last reference is released here.
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { backend.dispose() }
+        } else {
+            Task { @MainActor in backend.dispose() }
+        }
     }
 
     public static func availableDevices() throws -> [OutputDevice] {
         try CoreAudioOutputBackend.devices()
     }
 
-    public func prepare(uid: String, sampleRate: Double) throws {
+    public func prepare(uid: String, sampleRate: Double) async throws {
         stop()
         backend.resetDiagnostics()
         lastError = nil
+        let ticket = generation
         do {
+            try Task.checkCancellation()
             guard sampleRate.isFinite, sampleRate == 44100 || sampleRate == 48000 else {
                 throw DeviceOutputError.unsupportedFormat
             }
@@ -101,18 +169,27 @@ enum DeviceOutputError: LocalizedError {
             guard device.channels == 2, device.sampleRate == sampleRate else {
                 throw DeviceOutputError.unsupportedFormat
             }
-            let ticket = generation
-            try backend.configure(device: device, sampleRate: sampleRate) { [weak self] event in
-                guard let self, self.generation == ticket else { return }
+            try await backend.configure(device: device, sampleRate: sampleRate) { [weak self, weak backend = self.backend] event in
+                guard let self else {
+                    // An off-actor last release can leave disposal queued. A delivered fault
+                    // must still stop this owner's backend; the weak capture avoids a cycle.
+                    backend?.dispose()
+                    return
+                }
+                guard self.generation == ticket else { return }
                 self.stop()
                 self.lastError = (event == .renderFault ? DeviceOutputError.invalidBuffer : .changed).localizedDescription
             }
             guard generation == ticket else { throw DeviceOutputError.stale }
+            try Task.checkCancellation()
             try validate(device: device, sampleRate: sampleRate)
             prepared = device
             requestedRate = sampleRate
             selectedUID = uid
-        } catch { fail(error); throw error }
+        } catch {
+            if generation == ticket { fail(error) }
+            throw error
+        }
     }
 
     public func startSilence() throws {
@@ -159,6 +236,7 @@ enum DeviceOutputError: LocalizedError {
     private var source: AVAudioSourceNode?
     private var listeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
     private var configurationObserver: NSObjectProtocol?
+    private var configurationWait: DeviceConfigurationWait?
     private var sleepObserver: NSObjectProtocol?
     private var diagnosticTimer: DispatchSourceTimer?
     private var renderState: SilenceRenderState?
@@ -193,33 +271,16 @@ enum DeviceOutputError: LocalizedError {
     }
 
     func configure(device: OutputDevice, sampleRate: Double,
-                   onEvent: @escaping @MainActor @Sendable (DeviceOutputEvent) -> Void) throws {
+                   onEvent: @escaping @MainActor @Sendable (DeviceOutputEvent) -> Void) async throws {
+        try Task.checkCancellation()
         dispose()
         let graph = AVAudioEngine()
         engine = graph // Retain partial construction so every throwing path can dispose it.
         guard let unit = graph.outputNode.audioUnit else { throw DeviceOutputError.unavailable }
-        var id = device.deviceID
-        try Self.check(AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
-                                            kAudioUnitScope_Global, 0, &id, UInt32(MemoryLayout.size(ofValue: id))))
-        let actual = try snapshot()
-        guard actual.deviceID == id, actual.sampleRate == sampleRate, actual.channels == 2, actual.isStereo else {
-            throw DeviceOutputError.unsupportedFormat
-        }
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else {
-            throw DeviceOutputError.unsupportedFormat
-        }
-        let state = SilenceRenderState()
-        renderState = state
-        // The closure owns one immutable state reference. Rendering only touches atomic primitive
-        // storage; its last reference is released on the control side after stop and detach.
-        let node = AVAudioSourceNode(format: format) { @Sendable isSilence, _, frames, buffers in
-            isSilence.pointee = true
-            return state.render(frames: frames, buffers: buffers)
-        }
-        source = node
-        graph.attach(node)
-        graph.connect(node, to: graph.outputNode, format: format)
-        graph.prepare()
+        let initialFormat = graph.outputNode.outputFormat(forBus: 0)
+        let initialChange = initialFormat.sampleRate != sampleRate || initialFormat.channelCount != 2
+            ? DeviceConfigurationWait() : nil
+        configurationWait = initialChange
 
         // Core Audio notifications run on the explicit main queue. They never execute on our render callback.
         for selector in [kAudioDevicePropertyDeviceIsAlive, kAudioDevicePropertyNominalSampleRate] {
@@ -247,10 +308,46 @@ enum DeviceOutputError: LocalizedError {
         // Always hop asynchronously: Apple forbids tearing down the engine within its configuration notification.
         configurationObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: graph, queue: nil
-        ) { _ in Task { @MainActor in onEvent(.configurationChanged) } }
+        ) { _ in
+            Task { @MainActor in
+                if initialChange?.receiveExpectedChange() == true { return }
+                onEvent(.configurationChanged)
+            }
+        }
         sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willSleepNotification, object: nil, queue: nil
         ) { _ in Task { @MainActor in onEvent(.sleep) } }
+
+        // Setting CurrentDevice changes only this engine's route, never the OS default or rate.
+        // With a different initial format the engine processes its own reconfiguration later.
+        // Consume that one setup notification while there is no source and the graph is stopped.
+        var id = device.deviceID
+        try Self.check(AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+                                            kAudioUnitScope_Global, 0, &id, UInt32(MemoryLayout.size(ofValue: id))))
+        if let initialChange { try await initialChange.wait() }
+        try Task.checkCancellation()
+        // A cancelled older configure must neither use nor clear a newer generation's engine/wait.
+        guard engine === graph else { throw DeviceOutputError.stale }
+        configurationWait = nil
+        let actual = try snapshot()
+        guard actual.deviceID == id, actual.sampleRate == sampleRate, actual.channels == 2, actual.isStereo else {
+            throw DeviceOutputError.unsupportedFormat
+        }
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else {
+            throw DeviceOutputError.unsupportedFormat
+        }
+        let state = SilenceRenderState()
+        renderState = state
+        // The closure owns one immutable state reference. Rendering only touches atomic primitive
+        // storage; its last reference is released on the control side after stop and detach.
+        let node = AVAudioSourceNode(format: format) { @Sendable isSilence, _, frames, buffers in
+            isSilence.pointee = true
+            return state.render(frames: frames, buffers: buffers)
+        }
+        source = node
+        graph.attach(node)
+        graph.connect(node, to: graph.outputNode, format: format)
+        graph.prepare()
         // One bounded control-side poll; render errors never allocate a Task or send a notification.
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + .milliseconds(20), repeating: .milliseconds(20))
@@ -284,6 +381,8 @@ enum DeviceOutputError: LocalizedError {
     func stop() { engine?.stop() }
     func resetDiagnostics() { renderState = nil }
     func dispose() {
+        configurationWait?.cancel()
+        configurationWait = nil
         engine?.stop()
         diagnosticTimer?.cancel()
         diagnosticTimer = nil

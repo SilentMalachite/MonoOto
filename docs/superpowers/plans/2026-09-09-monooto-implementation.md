@@ -249,7 +249,7 @@ struct PlaybackTicket: Equatable { let generation: UInt64 }
 // finishPreparation(_ ticket: PlaybackTicket) -> Bool
 // start(_ ticket: PlaybackTicket) -> Bool：現在世代かつ準備済みだけをrunningへ移す
 // stop(), pause(), private(set) var phase: PlaybackPhase
-// DeviceOutput: prepare(uid: String, sampleRate: Double) throws
+// DeviceOutput: prepare(uid: String, sampleRate: Double) async throws
 // startSilence() throws, stop(), dispose()
 ```
 
@@ -267,13 +267,38 @@ func testLatePreparationCannotRestartPlayback() {
 
 - [x] 世代番号は制御側の直列実行で更新する。準備成功だけで`running`にはせず、現在世代と出力準備完了を再確認した開始操作だけが遷移させる。
 - [x] SwiftUIの小さいホストと共有schemeを作る。起動時は音声グラフを開始せず、画面には機器選択と明示的な無音経路テスト操作だけを置く。
-- [ ] 機器UIDをAudioObjectIDへ解決し、AVAudioEngineの出力AudioUnitに選択機器を設定する手順を、対象SDKと実機で確認する。戻り値と実際の出力形式を読み戻し、既定機器の暗黙利用を避ける。
-- [ ] 機器存在、2chの配置、レート、接続通知を確認する。指定UIDが消えたら停止し、既定出力の変更で勝手に追従しないことを無音のコールバック計数と機器IDで確認する。
-- [ ] `swift test --filter PlaybackStateTests`、`swift test --filter DeviceOutputTests`、共有schemeのビルド／テストを行い、機器固定と無音停止の実機結果を記録する。
+- [x] 機器UIDをAudioObjectIDへ解決し、AVAudioEngineの出力AudioUnitに選択機器を設定する手順を、対象SDKと実機で確認する。戻り値と実際の出力形式を読み戻し、既定機器の暗黙利用を避ける。
+- [x] 機器存在、2chの配置、レート、接続通知を確認する。指定UIDが消えたら停止し、既定出力の変更で勝手に追従しないことを無音のコールバック計数と機器IDで確認する。
+- [x] `swift test --filter PlaybackStateTests`、`swift test --filter DeviceOutputTests`、共有schemeのビルド／テストを行い、機器固定と無音停止の実機結果を記録する。
 
 **判定:** AVAudioEngineで選択機器固定・切断時停止を満たせない場合は、このタスクで停止する。原因と必要な音声出力境界の変更を提示し、動くと仮定してUIを作り進めない。
 
 **2026-09-09 実装記録:** 状態・機器制御・無音ホストを実装。自動検証と制約は[段階A検証記録](../../verification/stage-a.md)を参照。実行環境のCoreAudio列挙は出力機器0件であり、機器固定・切断時停止の実機条件は未検証。タスク4は未完了、タスク5・6は判定条件待ちで未着手。
+
+**2026-09-09 追試:** 現在の環境では3台を列挙でき、USB・48 kHzの無音開始・停止と最適化した本番音声境界の5回反復を確認した。SwiftPM/Xcode各60テストとReleaseビルドも成功。切断・既定出力変更・44.1 kHz／レート変更・スリープ等は引き続き未検証であり、上の実機条件のチェックは未完了のままとする。過去の機器0件という結果を現在の制約とは扱わない。
+
+**続く利用者協力による追試:** Debug・USB・48 kHzで、動作中の切断による自動停止、再接続後の停止維持、実スリープ・復帰後の停止維持を各1回確認した。切断を伴わない既定出力変更、44.1 kHz／レート変更、Releaseプロファイル等は残っているため、タスク4全体のチェックは未完了のままとする。詳細は段階A検証記録の末尾を参照。
+
+**異レート切替修正後:** 旧実装で既定出力変更・レート変更の停止を確認した後、異レートの機器へ初期切替すると遅延構成通知で再開できない問題を再現した。prepareをasync化し、未開始の初期設定中に一回だけ通知を待ち、2秒の期限と世代・キャンセル検証を追加した。SwiftPM/Xcode各70テスト、Release build、既定USB44.1→選択HDMI48とUSB44.1で各5回の開始停止を確認済み。監視登録を移したため、修正版での実機停止条件とプロファイルの再確認を残す。タスク4全体は未完了。
+
+#### タスク4追補: リアルタイム処理と破棄順序の検証計画
+
+対象は無音ホストのT6/T8/T9境界。タスク5以降、音楽再生、OS設定変更は含めない。既存の未コミット変更を維持する。
+
+事実は、現行renderが固定の診断状態を参照し、disposeがstop後にdetachし、診断状態を次のprepareまで保持すること。仮説は、初回を含むrenderに確保・解放・待ちがなく、最後の状態解放がcallback終了後の制御スレッドで起きること。初回のSwift metadata/witness解決、renderスタック下のmalloc/free/待ち、stop後の計数増加、callback中または制御側以外での状態解放が観測されたら合格を棄却する。
+
+変更対象: この既存計画、`docs/verification/stage-a.md`、`docs/verification/Task4RealtimeProbe.swift`、`docs/verification/instrument-task4.py`。不具合を確認した場合に限り`DeviceOutput.swift`と対応テストを最小修正し、修正前後を比較する。
+
+- [x] 現行ソースのハッシュと環境を保存し、`swiftc -swift-version 6 -target arm64-apple-macosx14.2 -O -whole-module-optimization -emit-sil`および`-emit-ir`でSourceNode closureから外部overlayまで追跡する。初回metadata解決も対象とする。
+- [x] 本番ソースをそのまま最適化コンパイルする実機プローブを追加する。機器名の明示指定が必須。準備中計数0、開始後計数増加とID一致、stop/dispose後の1秒不変、再準備、runningで所有者解放を確認する。UID・音声を記録しない。
+- [x] 初回開始前からAllocationsとTime Profilerを記録し、renderスレッドと確保スタックを照合する。記録開始前の確保やサンプルがないrenderを「違反なし」の根拠にしない。
+- [x] 一時コピーにのみ固定サイズのactive counterと制御側の寿命マーカーを挿入する。stop復帰・detach後・engine解放後・state deinitでactive=0、deinitがmain thread、detachより後であることをassertする。render内にログを追加しない。このビルドで時間性能を判定しない。
+- [x] `swift test`と共有schemeのtest/Release buildを実行する。診断追加だけで製品の振る舞いを変えない場合は不要なモックテストを増やさない。製品修正が必要なら先に実行可能な再現条件を固定する。
+- [x] ソース経路と実測を別観点で再監査し、検証記録へ条件・件数・失敗・残る制約・再実行手順を記す。完了範囲をSPECと整合させる。証拠が欠ける項目は未検証とする。
+
+**実行結果:** 2026-09-09、USB-A・48 kHzで本番ソースの最適化プローブと寿命診断を実行。SwiftPM／Xcode各70テストとRelease build成功。状態8個のmain thread解放、render本体の入口／出口計数一致を確認した。thunkにはARCが存在する。音声トレースの通常区間では待機を観測せず、停止末尾にはCoreAudioのSmart Routingによる同期IPC・ロック待ちを観測した。詳細と証拠は[段階A検証記録](../../verification/stage-a.md)の同日追加記録を参照。上のチェックは48 kHzでの追補計画の実行を示し、44.1 kHzでの同じプロファイル、全OSの保証、段階AのT8全体の完了を意味しない。タスク4全体は44.1 kHz追試待ちとし、タスク5・6は開始しない。
+
+**44.1 kHz追試後の最終判定:** 利用者によるUSB-Aのレート変更後、同じ本番ソースでAllocations／Time Profiler／Audio System Trace／寿命診断を各8反復実行した。状態8個のmain解放、render本体1,379回の入口／出口一致、通常IOProc最大143.625 µs、client cycle全1,397区間Normalを確認した。48 kHz同様、停止末尾にはOSの同期待ちがある。これまでの修正版の機器固定・変更時停止と今回の両レートの検証により、現行macOS／arm64／USB-Aでタスク4を完了とする。14.2実機、60分負荷、音楽経路を含むT8全体の合格ではない。タスク5・6は未着手。
 
 ### タスク5: 有界キューと即時無音化を作る
 
@@ -468,4 +493,4 @@ xcodebuild -project MonoOto.xcodeproj -scheme MonoOto -destination 'platform=mac
 
 ## 7. 次に着手する範囲
 
-実装を依頼された場合の最初の作業範囲はタスク1〜3、つまり音を出さないDSP・制限器・ファイル経路とする。A1の結果を報告してから、機器固定と再生制御へ進む。現在はタスク1〜3を実装し、オフラインテストとReleaseビルドを実行済み。タスク4以降、音声再生・システム設定変更・Git初期化は行っていない。
+タスク1〜4は現行環境で検証済み。次はタスク5の有界キュー実装とする。今回タスク5・6は開始していない。音楽再生の統合・知覚評価・段階Bは未着手。タスク4の完了は全OSや段階AのT8全体の保証ではない。最新の実行条件と未検証事項は[段階A検証記録](../../verification/stage-a.md)を参照する。
