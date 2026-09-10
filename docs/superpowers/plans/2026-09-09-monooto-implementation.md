@@ -6,13 +6,13 @@
 
 **Architecture（段階A全体の目標、キュー・再生統合は未実装）:** 音声のデコード・DSP・レート変換は制御されたワーカー上で処理し、最終ピーク制限済みPCMを有界キューへ渡す。AVAudioSourceNodeのコールバックは事前確保されたPCMの取り出しと片耳への出力に限定する。DSPをオフラインテストとアプリで共有し、システム音声取得は知覚評価後の別段階とする。
 
-**Tech Stack:** Swift、SwiftUI、Swift Package Manager、XCTest、AVFAudio、Core Audio。リアルタイム境界の有界キューと原子的な停止フラグのみタスク5でC11実装する予定（未着手）。
+**Tech Stack:** Swift、SwiftUI、Swift Package Manager、XCTest、AVFAudio、Core Audio。リアルタイム境界の有界キューと原子的な停止フラグのみタスク5で独立C11実装済み（アプリへの接続はタスク6）。
 
 **Spec:** [SPEC.md](../../../SPEC.md)、[AGENTS.md](../../../AGENTS.md)。本書は仕様の変更ではなく、実装順序と検証手順の具体化である。
 
 ## 現在の進捗（2026-09-10）
 
-実装コミット`645ac38`時点でタスク1〜4を実装・検証済み。ホストは無音のみで、次のタスク5（有界キュー）とタスク6（再生統合）は未着手。最新のSwiftPM／Xcode各75テストとReleaseビルドが成功し、所有者解放修正後のUSB 48 kHz寿命検証も成功した。44.1 kHzプロファイルと物理的な切断・スリープの実績は修正前のもので、最新修正後には再実施していない。詳細と残る条件は[段階A検証記録](../../verification/stage-a.md)を参照。
+実装コミット`645ac38`時点でタスク1〜4を実装・検証済み。ホストは無音のみ。タスク5（有界キュー）は今回実装し、SwiftPM全94件・ASan/TSan各19件とReleaseビルドを確認済み。60分合成負荷のC render性能ゲートも確認済み。タスク6（再生統合）は未着手。タスク4の所有者解放修正時にはSwiftPM／Xcode各75テストとReleaseビルドが成功し、同修正後のUSB 48 kHz寿命検証も成功した。44.1 kHzプロファイルと物理的な切断・スリープの実績は修正前のもので、最新修正後には再実施していない。詳細と残る条件は[段階A検証記録](../../verification/stage-a.md)を参照。
 
 以下の日付付き実装・レビュー記録は当時の状態を保存している。「未完了」「未検証」などの記述を現在の進捗として読まない。各タスクのチェックリストと本節が現在の進捗を示す。
 
@@ -101,7 +101,7 @@ SWIFTPM_MODULECACHE_OVERRIDE=/private/tmp/monooto-task123/module-cache CLANG_MOD
 
 ## 3. ファイル構成と境界
 
-以下は段階A全体の構成。現在はタスク1〜4のPackage・DSP・ファイル経路・機器出力境界・無音ホスト・対応テストを実装済み。タスク5以降のファイルは計画であり、各タスクで必要なものだけ追加する。
+以下は段階A全体の構成。現在はタスク1〜4のPackage・DSP・ファイル経路・機器出力境界・無音ホスト・対応テストを実装済み。タスク5のCキュー・SwiftPM専用試験・テスト補助Cも追加済み。タスク6以降のファイルは計画であり、各タスクで必要なものだけ追加する。
 
 | ファイル | 責務・導入タスク |
 | --- | --- |
@@ -310,41 +310,39 @@ func testLatePreparationCannotRestartPlayback() {
 
 ### タスク5: 有界キューと即時無音化を作る
 
-**対象:** `FrameQueue.h/.c`、`FrameQueueTests.swift`、`Package.swift`。対応: T5/T7/T8。
+**実装・単体検証完了（2026-09-10）:** 独立C11ターゲットとSwiftPM専用19テストを追加した。基点HEAD `2929fa6`＋作業差分。60分合成負荷でC render最大218 µs／p99 3 µs、5.33 ms以内を確認。実行証拠は[段階A検証記録](../../verification/stage-a.md)のタスク5節を参照。
 
-**インターフェース:** 下記C関数を公開する。`ear=0`は左、`1`は右。出力はnon-interleaved Float32、2ch。生成・破棄はコールバック外。
+**対象:** `Sources/MonoOtoRealtime/include/FrameQueue.h`、`FrameQueue.c`、`Tests/MonoOtoRealtimeTests/FrameQueueTests.swift`、`Tests/MonoOtoRealtimeTestSupport/FrameQueueTestSupport.c`とヘッダー、`Package.swift`。対応: T5/T7/T8のキュー単体境界。
+
+**実装API:** `ear=0`は左、`1`は右。出力はnon-interleaved Float32、2ch。容量は1〜4,096の2のべき乗、render上限は16,384。生成・破棄はコールバック外。
 
 ```c
 typedef struct MOFrameQueue MOFrameQueue;
-MOFrameQueue *mo_queue_create(unsigned capacity, unsigned ear);
-void mo_queue_destroy(MOFrameQueue *q);
-unsigned mo_queue_push(MOFrameQueue *q, const float *input, unsigned count);
-void mo_queue_render(MOFrameQueue *q, float *left, float *right, unsigned count);
-void mo_queue_silence(MOFrameQueue *q);
+typedef struct { float *data; uint32_t capacity; } MOFloatBuffer;
+typedef enum { MO_RENDER_OK, MO_RENDER_UNDERRUN,
+               MO_RENDER_SILENCED, MO_RENDER_FAULT } MORenderResult;
 typedef struct {
-    unsigned long long underruns;
-    unsigned long long invalid_samples;
-    unsigned high_water_frames;
+    uint64_t underruns, invalid_samples, invalid_buffers, rendered_frames;
+    uint32_t high_water_frames;
+    bool silenced, faulted;
 } MOQueueStats;
+MOFrameQueue *mo_queue_create(uint32_t capacity, unsigned ear);
+void mo_queue_destroy(MOFrameQueue *q);
+uint32_t mo_queue_push(MOFrameQueue *q, const float *input, uint32_t count);
+MORenderResult mo_queue_render(MOFrameQueue *q, MOFloatBuffer left,
+                              MOFloatBuffer right, uint32_t count);
+void mo_queue_silence(MOFrameQueue *q);
 MOQueueStats mo_queue_read_stats(const MOFrameQueue *q);
 ```
 
-- [ ] キュー満杯、空、wraparound、0 frames、上限以上の要求、反対耳ゼロ、無音化後の残音をバッファだけでテストする。書き込み済み領域と未使用領域の境界も検査する。
-- [ ] 一つのproducer／consumerに限定し、C11 acquire/releaseによる読み書き位置と無音フラグを実装する。対象でatomicがlock-freeか生成時に確認する。満杯を上書きせず、受理数を返す。
-- [ ] renderはまず両出力をゼロにし、無音化済みなら戻る。足りる分だけ取り出し、選択耳へコピーする。読み出し時にも非有限値・上限超過を防ぐ。無音化は解除せず、新しい再生世代で新キューを用意する。
+- [x] 満杯・部分受理・空・wrap・count=0・要求上限・左右容量・canary・反対耳ゼロを検証。未受理PCMは呼出し元が保持して再送する。
+- [x] SPSCのrelease/acquire公開と全11 atomicのlock-free確認。固定storageと所有者別診断を使用し、renderに確保・待機・ログを入れない。
+- [x] 有限値／最終上限検査、異常push全拒否、格納済み異常PCMのrender防御、sticky faultとsilenceを検証。正常PCMは再加工しない。
+- [x] 別シンボルのテスト版で無音化3競合点と整数wrapを検証。silenceはjoinではなく、終端確認済みrenderを取り消さない。
+- [x] pthreadの両耳各110万frames順序、意図的枯渇／満杯、1,000周期の全利用者join後破棄、ASan/TSan/UBSanを確認。
+- [x] 非計装60分合成負荷のC render性能ゲートを確認。44.1 kHz相当10分と最大frames 60秒も成功。OSの周期遅れ・不足は別計数し、実音声経路のT8合格とはしない。
 
-```c
-for (unsigned i = 0; i < count; ++i) {
-    left[i] = 0.0f;
-    right[i] = 0.0f;
-}
-/* この後はsilencedをacquireで確認し、確定済みframesだけを取り出す。 */
-```
-
-- [ ] 異常やunderflowはatomicカウンターで記録し、制御側から`mo_queue_read_stats`で読み出す。個別カウンターの診断スナップショットとし、読み出しにロックを導入しない。ログをrender内へ入れない。バッファポインタ・長さ不正時は触れる範囲を超えて書き込まず、OS境界側も返却バッファを検証する。
-- [ ] sanitizerを使ったテストと、通常ビルドの負荷テストを分ける。`swift test --filter FrameQueueTests` で順序保持・ゼロ・上限を確認する。
-
-**完了条件:** renderが確保・解放・ロック・Swiftコンテナに依存しない。キュー破棄はproducerとcallbackの両方が停止した後だけ行う。
+`rendered_frames`は正常に返した元PCMの累積数であり、OS再生位置ではない。統計は各項目独立のatomic snapshot。Task 6でバッファ検証、部分push再送、EOF/pause、世代・停止・全利用者終了後破棄を接続する。新しいキュー試験はSwiftPMのみで、Xcodeの既存75件には含まれない。
 
 ### タスク6: 共通経路と最小再生を統合する
 
@@ -501,4 +499,4 @@ xcodebuild -project MonoOto.xcodeproj -scheme MonoOto -destination 'platform=mac
 
 ## 7. 次に着手する範囲
 
-タスク1〜4は現行環境で検証済み。次はタスク5の有界キュー実装とする。今回タスク5・6は開始していない。音楽再生の統合・知覚評価・段階Bは未着手。タスク4の完了は全OSや段階AのT8全体の保証ではない。最新の実行条件と未検証事項は[段階A検証記録](../../verification/stage-a.md)を参照する。
+タスク1〜4は現行環境で検証済み。タスク5の独立キューは実装・自動検証済みで、60分合成負荷でC render最大218 µs／p99 3 µs、5.33 ms以内を確認。タスク6は未着手。音楽再生の統合・知覚評価・段階Bは未着手。タスク4の完了は全OSや段階AのT8全体の保証ではない。最新の実行条件と未検証事項は[段階A検証記録](../../verification/stage-a.md)を参照する。

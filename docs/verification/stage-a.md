@@ -1,17 +1,17 @@
 # 段階A 検証記録
 
-## 最新状況（2026-09-10、実装コミット`645ac38`）
+## 最新状況（2026-09-10、基点HEAD `2929fa6`＋タスク5作業差分）
 
-タスク1〜4の実装と、記録したmacOS／arm64／USB機器の範囲での検証を完了。無音ホストのみで、タスク5・6、音楽再生の統合、知覚評価は未着手。
+タスク1〜4の検証に加え、タスク5の独立C11有界キューを実装・自動検証済み。60分合成負荷のC render性能ゲートも確認済み。アプリは無音ホストのままで、タスク6・音楽再生の統合・知覚評価は未着手。
 
 | 範囲 | 最新の確認と限界 |
 | --- | --- |
-| 自動テスト・ビルド | キャンセル・所有者解放の修正後にSwiftPM／Xcode各75テスト成功、Releaseビルド成功 |
-| 最新版の実機寿命 | USB 48 kHz・4周期、4状態のmain thread最終解放、render入口／出口計377回一致。所有者解放の処理が戻る前に停止・切り離し・状態解放を確認 |
+| 自動テスト・ビルド | 今回SwiftPM 94件、Xcode既存75件、各Releaseビルド成功。キューのASan/TSan各19件成功。Xcodeには新規キュー試験を追加していない |
+| タスク4修正後の実機寿命 | USB 48 kHz・4周期、4状態のmain thread最終解放、render入口／出口計377回一致。所有者解放の処理が戻る前に停止・切り離し・状態解放を確認 |
 | 過去の実機・プロファイル | 機器固定、切断／再接続、既定出力変更、レート変更、スリープ、44.1／48 kHzプロファイルを確認済み。ただし最新のキャンセル・破棄修正より前の結果 |
 | 継続する制約 | 別スレッドでの所有者解放はMainActor実行待ちが残る。通常は明示stop／disposeを行う。最新修正後の44.1 kHz再プロファイル・物理的な切断／スリープ、macOS 14.2実機、60分負荷、音楽経路・知覚評価は未検証 |
 
-以下は時系列の履歴であり、古い節の「未完了」「機器0件」「Git未管理」「非同期破棄」等は当時の実装・環境を示す。新しい結果で過去の測定を書き換えない。末尾の2026-09-10「Grok指摘2」が最新の修正・実行証拠で、本サマリーのためにテストを再実行したものではない。
+以下は時系列の履歴であり、古い節の「未完了」「機器0件」「Git未管理」「非同期破棄」等は当時の実装・環境を示す。新しい結果で過去の測定を書き換えない。タスク4の最新修正証拠は2026-09-10「Grok指摘2」。今回のキュー実装と新たに実行した回帰・単体検証は末尾の「タスク5」に記録する。
 
 
 ## 2026-09-09 — タスク4：無音の機器固定ホスト
@@ -461,3 +461,99 @@ macOS 14.2実行、別機器・別OS、60分負荷、音楽DSP／有界キュー
 graphifyの既存グラフで`DeviceOutput`とbackend・テストの関係を参照し、現コードで再照合した。グラフはこの修正前のスナップショットであり、行番号や呼出し先の完全性を今回の証拠にしない。独立した静的監査でも、同期破棄の実行場所、循環参照、旧世代への影響を再確認した。
 
 **別スレッドからの最後の解放では、通知処理または破棄TaskがMainActorで実行されるまで遅延が残る。** MainActorが実行不能な間の即時停止・物理経路固定まで保証する修正ではない。明示`stop`／`dispose`を通常の所有者の終了処理とし、Viewの`onDisappear`の明示停止も保持する。今回の実機確認は無音・48 kHzの所有者解放であり、44.1 kHz再追試、同時USB抜去・スリープ、音楽の物理端子出力やAllocations／Time Profilerの再計測は実施していない。
+
+## 2026-09-10 — タスク5：独立C11有界キュー
+
+**タスク5の実装・単体検証を完了。60分合成負荷のC render性能ゲートも確認済み。** 基点HEAD `2929fa69b6990bb64ade36e91935b4c3d1473d5b`、`codex/task5-frame-queue`の差分を未コミットの状態で検証した。Task 6の音声経路・UIには接続していない。元checkoutの未追跡計画・graphify・`.ai-collab/`を保持し、専用worktreeで実装した。
+
+環境: Mac Studio／Apple M1 Max、arm64、macOS 26.6.2 (25G83)、Xcode 26.6 (17F113)、Swift 6.3.3、macOS SDK 26.5。`swift build -c release -v`のCコンパイル行で `-target arm64-apple-macosx14.2 -std=c11 -O2` を確認した。macOS 14.2実機での実行証拠ではない。
+
+### 実装範囲とRED/GREEN
+
+- `MonoOtoRealtime`は独立した内部Cターゲット。最大4,096 framesの固定SPSCリングと最大16,384 framesのrender要求を分離し、左右別capacityを検証する。音量調整・SRC・limiterは追加していない。
+- 5.1の最小stubで4テスト中3件の期待値失敗を確認し、固定storage・生成拒否・空キューを実装して4件成功。
+- 5.2の順序・容量／耳／要求サイズ・固定seed FIFO参照モデルで3,151 assertions失敗を確認し、SPSC公開と片耳コピーの実装後に7件成功。
+- 5.3の異常PCM・無音化等で4テスト、181 assertions失敗を確認し、全候補検査・fault／silenceラッチ・出力範囲検証後に13件成功。容量全範囲の重複、不整列、アドレスoverflow、null出力等の境界補完後に16件成功。
+- C pthreadハーネスは初回に正常順序成功・無音化後の非ゼロ出力で失敗（`lifecycle=33`）し、5.3実装後に成功。最終的なSwiftPMキュー試験は19件。テスト専用注入と並行試験は後述。
+
+正常PCMはOutputGuardと同じFloat32上限を確認してビット保持する。満杯・部分pushは正常backpressureで、受理候補以外は読まず、未受理分は呼出し元が再送する。不正要求・異常PCMはfaultとsilenceを解除不能にラッチする。count=0はnull qや異常状態より先に返り、状態も出力も変更しない。
+
+### 実行したテストと回帰
+
+| コマンド／試験 | 結果 |
+| --- | --- |
+| `swift test` | 94 tests、0 failures（既存75＋キュー19） |
+| `swift test --sanitize address --filter FrameQueueTests` | 19 tests、0 failures、ASan診断なし |
+| `swift test --sanitize thread --filter FrameQueueTests` | 19 tests、0 failures、TSan診断なし。ASanとは別実行 |
+| standalone C、`-O1 -g -fsanitize=undefined -DMO_QUEUE_TEST_MAIN`、`UBSAN_OPTIONS=halt_on_error=1` | `finite boundaries=0 order=0 lifecycle=0`、UBSan診断なし |
+| `swift build -c release -v` | 成功、C11／arm64／macOS 14.2 target確認 |
+| `xcodebuild -project MonoOto.xcodeproj -scheme MonoOto -destination 'platform=macOS,arch=arm64' test` | 既存75 tests、0 failures、TEST SUCCEEDED |
+| 同条件の`-configuration Release build` | BUILD SUCCEEDED |
+
+- `testBothEarsAndRenderSizesPreserveBitsAndCanaries`: 両耳、容量1/2/4/4096、要求1/3/256/1024/4096/16384、反対耳と不足末尾の厳密ゼロ、canaryを確認。
+- `testFixedSeedFIFOReference`、`testBackpressurePreservesOrder`: 独立配列FIFOと4,000操作を照合。満杯上書きなし、未受理分再送後の順序、元PCM数・不足回数・high-waterを確認。
+- `testInvalidPCMRejectsEntireCandidateAndLatchesFault`、`testPeakBoundaryAndSignedZeroPreserveBits`、`testOnlyAcceptedCandidatesAreInspected`: NaN/±Inf/±4/上限直上の先頭・中間・末尾、上限／直下、±0、未受理候補非消費を確認。
+- `testConcurrentMillionFrameOrder`: pthread producer／consumer／stats読者を並行実行し、両耳各1,100,000 framesで欠落・重複・順序逆転なし。部分pushは残りを再送し、既知の非ゼロPCMと不足ゼロを区別。消費数と`rendered_frames`をjoin後に照合。
+- `testThousandJoinedLifecycles`: 未読PCMを入れて開始し、3スレッドそれぞれのAPI実行を確認後にsilence／中止。全員のjoin後に破棄する1,000周期。silence時点の未読残量を固定する試験ではなく、未読PCMの無音化自体は専用試験でも確認している。destroyと利用を競合させていない。
+- `testInjectedContractsAndSilenceBoundaries`: 補助Cだけで製品Cを別シンボルに再コンパイル。確保2箇所と全11 atomicチェック位置の失敗注入、確保数ゼロへの復帰、格納済みNaN/Inf、占有不整合、内部PCM別名、UINT32_MAX跨ぎ（容量1/4096、初期空／非空）を確認。製品版／注入版は同一データ1,000操作ずつを両耳で比較。
+- 同試験内でpthread条件変数によりproducerを保持して枯渇、consumerを保持して満杯を確定的に再現。受理4／追加受理0、underruns=1、high-water=4、rendered_frames=4とcanaryを確認。sleepで競合成立を推測していない。
+- 注入版のpush公開前、renderコピー後の終端確認前、終端確認後に別スレッドからsilence。前2者は公開抑止／全ゼロ、最後は元PCMが残る保証境界を確認。終了後の新規renderは全ゼロ。無音化フラグをcallback終了保証へ拡張していない。
+
+ハーネスのtimeoutは協調的な中止で、製品関数が戻らない場合の強制終了watchdogではない。現行の製品関数は固定上限の処理であることを別途監査した。Swiftから生ポインタを`@unchecked Sendable`で共有していない。
+
+### リアルタイム経路の監査
+
+製品`FrameQueue.c` SHA256: `7829cb60fe12225d1c76c47b1a6b3537f9e7684309b4ec110ab511b478fee7c9`。
+
+- ソースと`-O2` assemblyを照合。renderのPCM検査・コピーは各最大4,096、左右ゼロ化は各最大16,384、終端で停止を観測した場合のみ再ゼロ化。CAS再試行・待機・確保／解放・I/O・ログ・Swift/ObjC呼出しなし。最適化後の外部ゼロ化は`bzero`。位置はacquire/release、診断は単一writerのrelaxed load/store。
+- 製品objectとstandalone負荷binaryのsymbolに注入hook／`mo_test_queue_*`／pthread mutex・condの待機処理はない。補助ターゲットは製品library・MonoOtoAudioの依存に追加していない。
+- Time Profiler 15秒の高頻度合成ループで14,991 samples中、render配下7,967 samplesは全てRunning。render配下の観測calleeはゼロ化と範囲確認のみ。確保・待機・ログなし。サンプリングは全命令の網羅証拠ではなく、source／assemblyと併用する。
+- Allocations 10秒の同じ製品Cプローブでは、開始時点の1,007件と生成時相当の96／16,384 bytesの2件を記録し、その後1秒以降の新規確保は0件。初回のデバッグ権限なしプローブは起動／PID attachとも接続に失敗したため、一時コピーだけに`com.apple.security.get-task-allow`を付けて再取得した。OS設定と製品の署名は変更していない。
+- プロファイル用プロセスは記録上限でInstrumentsが終了させており、正常終了・寿命の検証とはしない。計装結果を非計装render期限の測定値に使わない。
+
+### 非計装合成負荷
+
+製品Cを`-O2 -g -mmacosx-version-min=14.2 -DMO_QUEUE_TEST_MAIN`でコンパイルしたrunnerを使用。合成PCMのみで物理音声出力なし。256 framesの周期は48 kHzで5,333,333 ns、44.1 kHzで5,804,988 ns。render呼出し周辺の経過時間を計測し、PCM照合・待機・集計・ログは外側に置く。周期以上のスケジュール遅延はrender期限超過と別に計数する。
+
+**60分・48 kHz／256 frames: 3600.000934秒で正常終了。render最大218 µs／p99 3 µsで5.33 ms以内となり、計画のC render性能ゲートに合格。** 44.1 kHz／256 framesの600秒と48 kHz／16,384 framesの60秒は同じrunnerで成功。異なる条件とビルド／sanitizer／プロファイルを一部同時実行しており、無負荷で隔離した端末の測定ではない。
+
+| 条件 | 実測時間 | calls / audio_calls | render最大 / p99 | 周期遅れ | underruns / high-water / rendered_frames |
+| --- | --- | --- | --- | --- | --- |
+| 48 kHz・256 frames | 3600.000934秒 | 675000 / 674995 | 218 / 3 µs | 50（最大104.726 ms） | 5 / 4096 / 172798720 |
+| 44.1 kHz・256 frames | 600.000007秒 | 103360 / 103359 | 53 / 2 µs | 8（最大13.415 ms） | 1 / 4096 / 26459904 |
+| 48 kHz・16,384 frames | 59.999956秒 | 176 / 176 | 23 / 9 µs | 0 | 176 / 4096 / 720139 |
+
+3条件ともrunnerはexit 0。48 kHzの不足5回とOS周期遅れ50回は観測事実として残し、音切れゼロの実機証拠とはしない。最大frames条件の不足はキュー容量4,096が要求16,384より小さいために生じる。`result=0`だけで全呼出しへのPCM供給を保証せず、audio_callsと元PCM数を併記する。周期遅れや不足ゼロは音声機器での音切れの測定値ではない。
+
+### 証拠の場所と再現
+
+主担当のログ・assembly・object・runner・trace・XMLは `/private/tmp/monooto-task5-evidence-root/`。RED/GREENと注入補助のログは `/private/tmp/monooto-task5-impl.679iVH/`。一時ディレクトリは保存期間を保証しない。
+
+長時間試験中に追加したのは補助Cの有限回境界・注入試験のみで、負荷モードと製品Cは不変。測定binary SHA256は `3ba99400bfee07762c3dac8963fd2ba074b69240a374321b8667a179bf80312b`。
+
+主なログ: `swift-test-final.log`、`asan-final.log`、`tsan-final.log`、`ubsan-final.log`、`swift-release.log`、`xcode-test-final.log`、`xcode-release-final.log`、`load-48000-256.log`、`load-44100-256.log`、`load-48000-16384.log`。`FrameQueue.s`、`product-symbols.txt`、`hot-time.trace`／`hot-time-profile.xml`、`alloc-debug.trace`／`alloc-list.xml`に監査根拠を残した。
+
+```sh
+# 保存先は実行ごとに新規作成する。
+evidence_dir=$(mktemp -d /private/tmp/monooto-task5.XXXXXX)
+xcrun clang -std=c11 -O1 -g -fsanitize=undefined -DMO_QUEUE_TEST_MAIN \
+  -I Sources/MonoOtoRealtime/include -I Tests/MonoOtoRealtimeTestSupport/include \
+  Sources/MonoOtoRealtime/FrameQueue.c \
+  Tests/MonoOtoRealtimeTestSupport/FrameQueueTestSupport.c -o "$evidence_dir/ubsan"
+UBSAN_OPTIONS=halt_on_error=1 "$evidence_dir/ubsan"
+xcrun clang -std=c11 -O2 -g -mmacosx-version-min=14.2 -DMO_QUEUE_TEST_MAIN \
+  -I Sources/MonoOtoRealtime/include -I Tests/MonoOtoRealtimeTestSupport/include \
+  Sources/MonoOtoRealtime/FrameQueue.c \
+  Tests/MonoOtoRealtimeTestSupport/FrameQueueTestSupport.c -o "$evidence_dir/load"
+"$evidence_dir/load" --seconds 3600 --rate 48000 --frames 256
+"$evidence_dir/load" --seconds 600 --rate 44100 --frames 256
+"$evidence_dir/load" --seconds 60 --rate 48000 --frames 16384
+```
+
+### 再監査とTask 6への引継ぎ
+
+作業前は、固定容量・SPSC限定で既存DSPと機器寿命を変更せず成立するという仮説を置き、非lock-free、正常PCM変質、共有PCM競合、満杯時欠落、renderへの待機導入を棄却条件にした。既存graphifyの予定上の関係を現ソースと照合し、グラフを実装証拠にはしていない。製品APIの独立仕様レビューと品質レビュー、補助試験の再レビューに修正必須指摘なし。別のUBSanプローブでも±0・subnormalを含む1,048,576 framesの両耳ビット保持を確認した。
+
+Task 6ではOSアダプターのAudioBufferList数／チャンネル数／実容量／最大frames検証、部分push再送、EOFと通常underrunの区別、pauseの位置対応、世代更新を実装する。`rendered_frames`単独ではSRC／limiter遅延やOS未再生分を表さない。完全停止は世代更新→silence→producer中止→engine停止→producer/callbackと全利用者終了確認→残音とキュー破棄の順を守る。
+
+100 ms以内の新規供給停止、全製品モードと確認音のT5、物理端子の反対耳ゼロT7、実音声callbackのT8と60分実機負荷、再生操作T6、macOS 14.2実機、44.1／48 kHzの統合実機試験、知覚評価は未検証。今回の合成キュー検証で完了扱いにしない。実装・検証の実行時点ではcommit／pushを行わず、利用者の別途指示によりmainへ反映する。

@@ -10,9 +10,14 @@ let package = Package(
         .library(name: "MonoOtoAudio", targets: ["MonoOtoAudio"]),
     ],
     targets: [
+        .target(name: "MonoOtoRealtime"),
+        .target(name: "MonoOtoRealtimeTestSupport", dependencies: ["MonoOtoRealtime"],
+                path: "Tests/MonoOtoRealtimeTestSupport"),
+        .testTarget(name: "MonoOtoRealtimeTests", dependencies: ["MonoOtoRealtime", "MonoOtoRealtimeTestSupport"]),
         .target(name: "MonoOtoCore"),
         .target(name: "MonoOtoAudio", dependencies: ["MonoOtoCore"]),
         .testTarget(name: "MonoOtoCoreTests", dependencies: ["MonoOtoCore"]),
         .testTarget(name: "MonoOtoAudioTests", dependencies: ["MonoOtoAudio", "MonoOtoCore"]),
-    ]
+    ],
+    cLanguageStandard: .c11
 )
