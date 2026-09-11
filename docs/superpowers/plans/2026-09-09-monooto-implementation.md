@@ -6,13 +6,13 @@
 
 **Architecture（段階A全体の目標、キュー・再生統合は未実装）:** 音声のデコード・DSP・レート変換は制御されたワーカー上で処理し、最終ピーク制限済みPCMを有界キューへ渡す。AVAudioSourceNodeのコールバックは事前確保されたPCMの取り出しと片耳への出力に限定する。DSPをオフラインテストとアプリで共有し、システム音声取得は知覚評価後の別段階とする。
 
-**Tech Stack:** Swift、SwiftUI、Swift Package Manager、XCTest、AVFAudio、Core Audio。リアルタイム境界の有界キューと原子的な停止フラグのみタスク5で独立C11実装済み（アプリへの接続はタスク6）。
+**Tech Stack:** Swift、SwiftUI、Swift Package Manager、XCTest、AVFAudio、Core Audio。リアルタイム境界の有界キューと原子的な停止フラグのみタスク5で独立C11実装済み。タスク6でC render境界と再生workerを接続済み。
 
 **Spec:** [SPEC.md](../../../SPEC.md)、[AGENTS.md](../../../AGENTS.md)。本書は仕様の変更ではなく、実装順序と検証手順の具体化である。
 
 ## 現在の進捗（2026-09-10）
 
-実装コミット`645ac38`時点でタスク1〜4を実装・検証済み。ホストは無音のみ。タスク5（有界キュー）は今回実装し、SwiftPM全94件・ASan/TSan各19件とReleaseビルドを確認済み。60分合成負荷のC render性能ゲートも確認済み。タスク6（再生統合）は未着手。タスク4の所有者解放修正時にはSwiftPM／Xcode各75テストとReleaseビルドが成功し、同修正後のUSB 48 kHz寿命検証も成功した。44.1 kHzプロファイルと物理的な切断・スリープの実績は修正前のもので、最新修正後には再実施していない。詳細と残る条件は[段階A検証記録](../../verification/stage-a.md)を参照。
+実装コミット`645ac38`時点でタスク1〜4を実装・検証済み。ホストは無音のみ。タスク5（有界キュー）は今回実装し、SwiftPM全94件・ASan/TSan各19件とReleaseビルドを確認済み。60分合成負荷のC render性能ゲートも確認済み。タスク6（再生統合）は2026-09-11に実装・自動検証済み。実機の音楽出力とcallback全体の検証が残るため、タスク6の受け入れ完了とはしない。タスク4の所有者解放修正時にはSwiftPM／Xcode各75テストとReleaseビルドが成功し、同修正後のUSB 48 kHz寿命検証も成功した。44.1 kHzプロファイルと物理的な切断・スリープの実績は修正前のもので、最新修正後には再実施していない。詳細と残る条件は[段階A検証記録](../../verification/stage-a.md)を参照。
 
 以下の日付付き実装・レビュー記録は当時の状態を保存している。「未完了」「未検証」などの記述を現在の進捗として読まない。各タスクのチェックリストと本節が現在の進捗を示す。
 
@@ -101,7 +101,7 @@ SWIFTPM_MODULECACHE_OVERRIDE=/private/tmp/monooto-task123/module-cache CLANG_MOD
 
 ## 3. ファイル構成と境界
 
-以下は段階A全体の構成。現在はタスク1〜4のPackage・DSP・ファイル経路・機器出力境界・無音ホスト・対応テストを実装済み。タスク5のCキュー・SwiftPM専用試験・テスト補助Cも追加済み。タスク6以降のファイルは計画であり、各タスクで必要なものだけ追加する。
+以下は段階A全体の構成。現在はタスク1〜4のPackage・DSP・ファイル経路・機器出力境界・無音ホスト・対応テストを実装済み。タスク5のCキュー・SwiftPM専用試験・テスト補助Cも追加済み。タスク6の再生worker・制御・C render境界と最小UIも追加済み。タスク7以降は計画であり、各タスクで必要なものだけ追加する。
 
 | ファイル | 責務・導入タスク |
 | --- | --- |
@@ -346,14 +346,16 @@ MOQueueStats mo_queue_read_stats(const MOFrameQueue *q);
 
 ### タスク6: 共通経路と最小再生を統合する
 
+**2026-09-11 実装記録:** 再生統合と最小UIを実装。自動検証結果と実機の未完了条件は[段階A検証記録](../../verification/stage-a.md)を参照。以下の実機を含む項目は未完了のままとする。
+
 **対象:** `PlaybackController.swift`、`DeviceOutput.swift`、`PlaybackControllerTests.swift`。対応: T5〜T9。
 
 **インターフェース:** `PlaybackController`は制御側で直列化する。`open(url:) async throws`、`play() async throws`、`pause()`、`stop()`、`seek(seconds:) async throws`、`selectOutput(uid:ear:)`、`set(mode:parameters:gainDB:)`。公開状態は`PlaybackPhase`、再生位置、相殺警告、エラーのみ。再生ワーカーとUIは同じEncoderを直接共有しない。
 
-- [ ] 出力先をモックにして、準備中stop、open A→open B→Aの完了、seek中stop、切断直後の再開始、デコード失敗を再現するテストを先に追加する。
-- [ ] ワーカーで`AudioFilePipeline`からキュー空き容量まで読み出す。キューへの部分書き込みをデータ欠落にしない。制御要求はブロック境界で適用し、DSP値を本試験中固定する仕組みもここに置く。
-- [ ] SourceNodeのclosureは固定寿命のキューを参照してC renderを呼ぶ。処理前にチャンネル数と各バッファ容量を検証する。callbackとワーカーの停止完了を確認するまでキューを解放しない。
-- [ ] 停止手順を次の順序に統一する。
+- [x] 出力先をモックにして、準備中stop、open A→open B→Aの完了、seek中stop、切断直後の再開始、デコード失敗を再現するテストを先に追加する。
+- [x] ワーカーで`AudioFilePipeline`からキュー空き容量まで読み出す。キューへの部分書き込みをデータ欠落にしない。制御要求はブロック境界で適用し、DSP値を本試験中固定する仕組みもここに置く。
+- [x] SourceNodeのclosureは固定寿命のキューを参照してC renderを呼ぶ。処理前にチャンネル数と各バッファ容量を検証する。callbackとワーカーの停止完了を確認するまでキューを解放しない。
+- [x] 停止手順を次の順序に統一する。
 
 ```text
 世代更新 → mo_queue_silence → producerキャンセル → engine停止
@@ -361,8 +363,8 @@ MOQueueStats mo_queue_read_stats(const MOFrameQueue *q);
 → stopped表示
 ```
 
-- [ ] pauseでは消費済み出力framesから入力位置を求め、先読み位置を再開位置にしない。リサンプラーと制限器の遅延を考慮し、再開時にスキップ・重複が起きないことをPCM比較で確認する。seekも新世代として準備し直す。
-- [ ] 耳／機器の変更時は停止し、再開操作を待つ。キューunderflowはゼロと通知、デコードエラーや繰り返す供給失敗は停止する。4096 framesを超える音声待ちを作らない。
+- [x] pauseでは操作ticketを更新してrenderを可逆holdし、workerの駐止完了を待つ。同じ音声sessionのqueue、未push PCM＋offset、pipeline（SRC位相・DSP履歴・limiter先読み・開始fade）を保持する。消費framesからのseek/resetで再開位置を作らず、再開時に元PCMの欠落・重複がないことを連続参照とのbit比較で確認する。stop/seek/open/耳・機器変更は旧sessionを破棄し、新音声sessionとして準備する。開始100 ms fadeは新音声sessionに適用し、pause解除では再初期化しない。
+- [x] 耳／機器の変更時は停止し、再開操作を待つ。キューunderflowはゼロと通知、デコードエラーや繰り返す供給失敗は停止する。4096 framesを超える音声待ちを作らない。
 - [ ] 実機の出力経路確認後、利用者の明示操作で低い初期音量の短い確認音を再生する。確認音も共通ゲイン、レート変換、制限器、キューを通す。
 - [ ] `swift test --filter PlaybackControllerTests` とタスク4・5のテストを再実行する。stopから新規供給停止まで100 ms以内を測定する。
 
@@ -499,4 +501,4 @@ xcodebuild -project MonoOto.xcodeproj -scheme MonoOto -destination 'platform=mac
 
 ## 7. 次に着手する範囲
 
-タスク1〜4は現行環境で検証済み。タスク5の独立キューは実装・自動検証済みで、60分合成負荷でC render最大218 µs／p99 3 µs、5.33 ms以内を確認。タスク6は未着手。音楽再生の統合・知覚評価・段階Bは未着手。タスク4の完了は全OSや段階AのT8全体の保証ではない。最新の実行条件と未検証事項は[段階A検証記録](../../verification/stage-a.md)を参照する。
+タスク1〜4は現行環境で検証済み。タスク5の独立キューは実装・自動検証済みで、60分合成負荷でC render最大218 µs／p99 3 µs、5.33 ms以内を確認。タスク6の音楽再生統合は実装・自動検証済み。実機の物理出力とcallback全体の確認は未完了。知覚評価・段階Bは未着手。タスク4の完了は全OSや段階AのT8全体の保証ではない。最新の実行条件と未検証事項は[段階A検証記録](../../verification/stage-a.md)を参照する。

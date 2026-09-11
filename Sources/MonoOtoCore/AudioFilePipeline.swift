@@ -8,7 +8,7 @@ public enum AudioFilePipelineError: Error, Equatable, Sendable {
     case invalidSeek, invalidGain, stereoRequired, faulted
 }
 
-/// Synchronous, single-worker-owned file processing. Never call from an audio callback or
+/// Synchronous, single-worker-owned file or confirmation-tone processing. Never call from an audio callback or
 /// concurrently. Each read returns at most 1024 frames, regardless of the requested size.
 /// Resamplers use normal priming: synthesized trailing samples are drained through EOS,
 /// without adding a leading SRC delay. Nonempty output includes the guard's 5 ms delay
@@ -26,7 +26,8 @@ public final class AudioFilePipeline {
     public let latencyFrames: Int
     public static let maximumReadFrames = 1_024
 
-    private let file: AVAudioFile
+    private let file: AVAudioFile?
+    private var toneFramePosition: Int64 = 0
     private let decoded: AVAudioPCMBuffer
     private let encoded: AVAudioPCMBuffer
     private let inputConverter: FilePCMConverter
@@ -46,31 +47,53 @@ public final class AudioFilePipeline {
     private var producedAudio = false
     private var tailRemaining = 0
 
-    public init(url: URL, outputRate: Double) throws {
+    public convenience init(url: URL, outputRate: Double) throws {
         guard outputRate == 44_100 || outputRate == 48_000 else {
             throw AudioFilePipelineError.unsupportedSampleRate
         }
         try Self.validateFile(url)
+        let file: AVAudioFile
         do { file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false) }
         catch { throw AudioFilePipelineError.invalidFile }
         try Self.validatePCM(file.fileFormat.streamDescription.pointee)
         guard file.processingFormat.sampleRate == file.fileFormat.sampleRate,
               file.processingFormat.channelCount == file.fileFormat.channelCount,
               file.length >= 0 else { throw AudioFilePipelineError.invalidFile }
-        sourceFrameCount = file.length
-        sourceRate = file.processingFormat.sampleRate
-        channelCount = Int(file.processingFormat.channelCount)
+        try self.init(file: file, sourceFormat: file.processingFormat,
+                      sourceFrameCount: file.length, outputRate: outputRate)
+    }
+
+    /// Creates a fixed 500 Hz, 0.5-second stereo confirmation source, amplitude 0.1.
+    /// A 20 ms end taper reaches zero on the final sample. The common start fade,
+    /// gain, Encoder, SRC, and OutputGuard remain active. Construction never plays audio.
+    /// Samples are generated into the bounded decode buffer; no audio file is created.
+    public convenience init(confirmationToneOutputRate outputRate: Double) throws {
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2) else {
+            throw AudioFilePipelineError.conversionFailed
+        }
+        try self.init(file: nil, sourceFormat: format, sourceFrameCount: 24_000, outputRate: outputRate)
+    }
+
+    private init(file: AVAudioFile?, sourceFormat: AVAudioFormat,
+                 sourceFrameCount: Int64, outputRate: Double) throws {
+        guard outputRate == 44_100 || outputRate == 48_000 else {
+            throw AudioFilePipelineError.unsupportedSampleRate
+        }
+        self.file = file
+        self.sourceFrameCount = sourceFrameCount
+        sourceRate = sourceFormat.sampleRate
+        channelCount = Int(sourceFormat.channelCount)
         self.outputRate = outputRate
-        guard let dspFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: file.processingFormat.channelCount),
+        guard let dspFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: sourceFormat.channelCount),
               let monoFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1),
               let outputFormat = AVAudioFormat(standardFormatWithSampleRate: outputRate, channels: 1),
-              let decoded = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(Self.maximumReadFrames)),
+              let decoded = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(Self.maximumReadFrames)),
               let encoded = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: AVAudioFrameCount(Self.maximumReadFrames)) else {
             throw AudioFilePipelineError.conversionFailed
         }
         self.decoded = decoded
         self.encoded = encoded
-        inputConverter = try FilePCMConverter(from: file.processingFormat, to: dspFormat)
+        inputConverter = try FilePCMConverter(from: sourceFormat, to: dspFormat)
         outputConverter = try FilePCMConverter(from: monoFormat, to: outputFormat)
         encoder = try Encoder(parameters: .init(strength: 0.35, cutoffHz: 1_500))
         outputGuard = try OutputGuard(sampleRate: outputRate)
@@ -128,13 +151,15 @@ public final class AudioFilePipeline {
 
     public func seek(sourceFrame: Int64) throws {
         guard (0...sourceFrameCount).contains(sourceFrame) else { throw AudioFilePipelineError.invalidSeek }
-        file.framePosition = sourceFrame
+        file?.framePosition = sourceFrame
+        toneFramePosition = sourceFrame
         clearProcessingState()
         isFaulted = false
     }
 
     public func reset() {
-        file.framePosition = 0
+        file?.framePosition = 0
+        toneFramePosition = 0
         clearProcessingState()
         isFaulted = false
     }
@@ -161,11 +186,26 @@ public final class AudioFilePipeline {
     }
 
     private func decode(_ requested: AVAudioPacketCount) throws -> AVAudioPCMBuffer? {
-        guard file.framePosition < sourceFrameCount else { return nil }
+        let position = file?.framePosition ?? toneFramePosition
+        guard position < sourceFrameCount else { return nil }
         let count = min(AVAudioFrameCount(Self.maximumReadFrames), requested)
         guard count > 0 else { throw AudioFilePipelineError.conversionFailed }
-        do { try file.read(into: decoded, frameCount: count) }
-        catch { throw AudioFilePipelineError.decodeFailed }
+        if let file {
+            do { try file.read(into: decoded, frameCount: count) }
+            catch { throw AudioFilePipelineError.decodeFailed }
+        } else {
+            let frames = min(Int64(count), sourceFrameCount - toneFramePosition)
+            decoded.frameLength = AVAudioFrameCount(frames)
+            let channels = decoded.floatChannelData!
+            for i in 0..<Int(frames) {
+                let index = toneFramePosition + Int64(i)
+                let taper = min(1, Float(sourceFrameCount - 1 - index) / 960)
+                let sample = Float(sin(2 * Double.pi * 500 * Double(index) / 48_000)) * 0.1 * taper
+                channels[0][i] = sample
+                channels[1][i] = sample
+            }
+            toneFramePosition += frames
+        }
         guard decoded.frameLength > 0 else { throw AudioFilePipelineError.decodeFailed }
         try FilePCMConverter.validate(decoded)
         return decoded

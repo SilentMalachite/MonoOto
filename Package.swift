@@ -15,9 +15,9 @@ let package = Package(
                 path: "Tests/MonoOtoRealtimeTestSupport"),
         .testTarget(name: "MonoOtoRealtimeTests", dependencies: ["MonoOtoRealtime", "MonoOtoRealtimeTestSupport"]),
         .target(name: "MonoOtoCore"),
-        .target(name: "MonoOtoAudio", dependencies: ["MonoOtoCore"]),
+        .target(name: "MonoOtoAudio", dependencies: ["MonoOtoCore", "MonoOtoRealtime"]),
         .testTarget(name: "MonoOtoCoreTests", dependencies: ["MonoOtoCore"]),
-        .testTarget(name: "MonoOtoAudioTests", dependencies: ["MonoOtoAudio", "MonoOtoCore"]),
+        .testTarget(name: "MonoOtoAudioTests", dependencies: ["MonoOtoAudio", "MonoOtoCore", "MonoOtoRealtime"]),
     ],
     cLanguageStandard: .c11
 )

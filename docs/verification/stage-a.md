@@ -557,3 +557,127 @@ xcrun clang -std=c11 -O2 -g -mmacosx-version-min=14.2 -DMO_QUEUE_TEST_MAIN \
 Task 6ではOSアダプターのAudioBufferList数／チャンネル数／実容量／最大frames検証、部分push再送、EOFと通常underrunの区別、pauseの位置対応、世代更新を実装する。`rendered_frames`単独ではSRC／limiter遅延やOS未再生分を表さない。完全停止は世代更新→silence→producer中止→engine停止→producer/callbackと全利用者終了確認→残音とキュー破棄の順を守る。
 
 100 ms以内の新規供給停止、全製品モードと確認音のT5、物理端子の反対耳ゼロT7、実音声callbackのT8と60分実機負荷、再生操作T6、macOS 14.2実機、44.1／48 kHzの統合実機試験、知覚評価は未検証。今回の合成キュー検証で完了扱いにしない。実装・検証の実行時点ではcommit／pushを行わず、利用者の別途指示によりmainへ反映する。
+
+
+## 2026-09-11 — Task 6 再生統合（実装・自動検証済み、実機受け入れ未完了）
+
+基点HEAD `77cebeeec8735e8a8881d8c6926b21ecfe949b90`、branch `codex/task6-playback` の作業差分を検証した。指定されたTask 6計画のHTMLと正本Markdownを読み、graphifyによる構造案を現在のソースに照合した。既存グラフのworker連携は予定上の推論で、実装の証拠ではなかった。独立した担当がC render／DeviceOutput、worker、Controller／確認音を実装し、主担当が統合、UI、回帰確認、別担当の再レビューを行った。タスク7以降へは進んでいない。
+
+実行環境: macOS 26.6.2 (25G83)、Apple Silicon arm64、Xcode 26.6 (17F113)、Swift 6.3.3。元のmainと未追跡の計画・生成物を保持し、専用worktreeで作業した。コミット・merge・pushは行っていない。
+
+### 実装した契約
+
+- 単一のserial workerだけがAudioFilePipelineの生成、read、設定、seek、破棄を行う。queueは4096 frames、未push PCMは最大1 block／1024 frames、queue内と未pushの合計は4096以下。部分受理はoffsetから再送する。満杯を異常にしない。
+- 音声session IDと操作ticketを分離した。Controllerは単一driver、実行中の要求1件、置換される最新要求1件で進める。準備Taskはsessionごとに最大1件。応答しない準備を待ち続けてstopを塞がず、2秒の終了確認期限を超えた場合は1 sessionを保持してerrorとし、新規再生を拒否する。終了後の明示stopで回復できる。
+- workerのfinishedフラグだけでは終了と扱わない。実行closureとtimerの所有が外れた`completionConfirmed`、準備Task完了、engine／sourceのlease解放、C active=0を確認して所有を放す。
+- pauseはrenderの可逆holdとworker駐止の両方を確認し、queue・pending offset・SRC位相・DSP履歴・limiter先読み・fade進行を保持する。同じsessionの再開でseek/resetを使わない。停止・シーク・ファイル／機器／耳変更は不可逆silenceで旧sessionを破棄する。新しいsessionのみ100 ms開始fadeを適用する。
+- C RenderContextはAudioBufferListのdescriptor数、チャンネル数、整列、容量、重複範囲、最大16384 framesを確認する。不正時は到達可能な範囲を無音化しfaultをラッチする。正常時だけqueueのC renderを一度呼び、非選択耳を厳密ゼロにする。0 framesではqueue・fault・統計に触れない。ABIが渡したポインタと記述サイズの真実性は呼出側の前提で、任意の無効アドレスを安全に検証するAPIではない。
+- EOFはworkerの永続状態とaccepted／renderedの一致で判定し、その後にoutput.presentationLatencyとIO buffer周期分のゼロdrainを待つ。pause中のEOFは再開待ちとする。位置表示はlimiter遅延を差し引いたアプリ供給位置の概算で、物理再生位置ではない。
+- 通常の不足はゼロ補完。20 msの制御pollで直近1秒内の不足3回、または未供給PCMがあり500 ms消費が進まない場合に停止する。poll時刻による検出であり、callback単位の正確な発生時刻や100 ms停止実測ではない。
+- 確認音は48 kHz stereo、500 Hz、0.5秒、振幅0.1、末尾20 msの減衰を小さいdecode bufferへ生成する。WAVや音声ファイルを作らず、同じEncoder／ゲイン／SRC／OutputGuard／queue／renderを通す。初期mono、強さ0.35、基準1500 Hz、ゲイン−18 dB、nilはミュート。停止中のミュート変更も次回sessionに保持する。
+- 最小UIはファイル、機器、耳、再生／pause／stop／seek、比較、設定、確認音、警告を提供する。ファイルを開くだけでは鳴らない。機器・耳は未選択で起動する。UIから待機する非同期操作は最大1件、停止操作は常時可能。Cmd+.で停止する。フルパスをログ・エラーへ出さない。
+
+### 自動検証の最終結果
+
+最終の製品ソースに対して以下を実行した。Xcodeの127件はCore／Audioのhost testsで、C専用の27件はSwiftPM側に含まれる。
+
+| ゲート | 実行結果 | ログ（`/private/tmp/`） |
+| --- | --- | --- |
+| baseline `swift test` | 94件、失敗0 | `monooto-task6-baseline.log` |
+| 最終 `swift test` | 154件、失敗0 | `monooto-task6-full.log` |
+| ASan: RenderContext／PlaybackWorker／PlaybackController | 52件、失敗0 | `monooto-task6-final-asan.log` |
+| TSan: 同じ3 suites | 52件、失敗0 | `monooto-task6-final-tsan.log` |
+| 実C内のbarrierによるhold／stop、ASan／TSan／UBSan | 各400 cases成功 | `monooto-render-barrier-{address,thread,undefined}.log` |
+| `swift build -c release` | 成功 | `monooto-task6-final-release.log` |
+| Xcode host tests | 127件、失敗0、TEST SUCCEEDED | `monooto-task6-xcode-test.log` |
+| Xcode Release app build | BUILD SUCCEEDED | `monooto-task6-xcode-release.log` |
+| 実機プローブのcompile／読み取り専用 `--list` | 成功（再生なし） | `monooto-task6-probe-{build,list}.log` |
+
+主な回帰の意味:
+
+- retained PCM比較は44.1／48 kHzの入力・出力4組合せ、broadband、impulse、実ゼロ、逆相を含む音源で連続参照とbit一致する。手動sinkは消費統計を用いて元PCMと不足ゼロを区別する。消費位置からseekして再開する旧案は不一致を実際に検出したため棄却した。
+- workerは部分push、満杯、parkとread終了／EOFの交差、sourceエラー、停止とreadの競合をbarrierで再現した。finishedを公開した直後でも実行closureが残れば所有を放してはいけないことを失敗するテストで確認し、completion leaseで修正した。
+- Controllerは準備中stop、open置換、seek中stop、古い準備、準備前pauseからの再開、pause中EOF、空ファイル、無進行、rolling underflow、2秒cleanup timeoutと回復、停止中ミュート保存を確認した。factoryをbarrierで止めた準備でもstopがerrorへ到達し、解除後の次回再生がミュートになる。
+- Controllerの`testFinalRoutingMatrixForFileAndToneEveryModeEarRateAndMute`はfile／tone×出力44.1／48 kHz×左右耳×全4モード×gain 0／muteの64条件。最終C renderの2048 framesが有限、ピーク上限以下、反対耳厳密ゼロ、非muteは非零となる。mono音源でL/R単独を拒否し、確認音のseekを拒否する。
+- 確認音は別生成した同一波形WAVとの全PCM比較を、出力2レート×4モード×gain −18／0／nilの24条件で行った。既存の過大入力・非有限値・ピーク制限テストも全体で再実行した。
+- ソフトウェアの開始・停止1000周期を実行した。これは実機1000周期や聴取試験ではない。
+- C入口後とqueue帰還後で別スレッドをbarrier停止し、active=1、hold中の未消費PCM保持、既に通過したPCMを一度だけ計上、次回無音、join後破棄を確認した。source leaseをC入口前に保持する試験とは区別している。テストhookは専用C補助にのみ入り、通常製品のRelease assemblyは追加前後で一致した。
+
+RED/GREENの詳細ログは`monooto-task6-61-{red,green}.log`、`monooto-worker-completion-{red,green}.log`、`monooto-task6-controller-blocked-red.log`、`monooto-task6-controller-final29-green.log`等。初期の部分実行で失敗したテストは原因を修正し、上記の最終全体実行で再確認した。一時ログの保存期間は保証しない。
+
+```sh
+swift test --scratch-path /private/tmp/monooto-task6-final
+swift test --scratch-path /private/tmp/monooto-task6-final-asan --sanitize address \
+  --filter 'RenderContextTests|PlaybackWorkerTests|PlaybackControllerTests'
+swift test --scratch-path /private/tmp/monooto-task6-final-tsan --sanitize thread \
+  --filter 'RenderContextTests|PlaybackWorkerTests|PlaybackControllerTests'
+swift build -c release --scratch-path /private/tmp/monooto-task6-final-release
+xcodebuild -project MonoOto.xcodeproj -scheme MonoOto \
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath /private/tmp/monooto-task6-xcode test
+xcodebuild -project MonoOto.xcodeproj -scheme MonoOto \
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath /private/tmp/monooto-task6-xcode -configuration Release build
+```
+
+### 境界の監査と残る性能条件
+
+C本体と最適化assemblyでは、固定上限の検査・ゼロ化・コピーとlock-free atomicのみで、確保／解放、待機、I/O、ログはない。SwiftのSourceNode callback本体はC呼出しと値の受け渡しだが、ObjC→Swiftのreabstraction thunkにはclosureのstrong retain／releaseが残る。アプリのqueue所有者を制御側で保持する証拠を、frameworkを含む全closureの最終解放threadや全callback無確保の証明へ拡張しない。実機のAllocations／Time Profiler／寿命計装は未実施であり、T8全体は未合格。
+
+製品Cの非計装hot loopを各耳100,000回、256 framesで実行した。左p50 334 ns／p99 833 ns／最大7,125 ns、右p50 291 ns／p99 292 ns／最大21,583 ns、両耳とも周期相当5.33 ms超過0。各25,600,000 frames、入口／出口100,000、active=0で終了した（`monooto-task6-render-perf.log`）。これは待機周期を持たない合成C microbenchmarkであり、AVAudioEngine callback測定、60分負荷、音切れや物理出力の証拠ではない。
+
+メモリはqueue PCM 16,384 bytes、worker pending最大4,096 bytesを明示的に制限する。配列として数えられるstereo／48 kHz pipeline payloadは425,740 bytes、両者を合わせ446,220 bytes（配列・DSP・limiterの要素payloadの静的集計）。read交換中には直前の最大4,096 bytesが一時的に重なる可能性がある。オブジェクトheader、allocator、AVAudioFile／AVAudioConverterの不透明な内部、ARC一時所有はこの集計に含まれない。全プロセス最大bytesを測定済みとはしない。queue＋pendingの4096 framesは48 kHzで85.33 ms、44.1 kHzで92.88 msだが、pipeline内のSRC／limiter先読みは別であり、framework内部を含む総先読み上限は未検証。
+
+### 実機プローブと受け入れの残り
+
+`Task6PlaybackProbe.swift`を追加した。`--list`は読み取りのみで出力機器を列挙し、今回成功した。再生には利用者が選んだ`--uid`、`--ear left|right`、`--file`または`--tone`が必要。初期ゲイン−18 dBでOS音量は変更しない。`--pause`、最大1000 cycles／3600秒の測定を準備したが、今回それらの実再生は行っていない。stop呼出しの所要時間、settled、供給統計を出すが、物理的無音やcallback実行時間の測定器ではない。
+
+コンパイル例（上記debug package build後、Pythonで引数配列を直接渡す）:
+
+```sh
+python3 - <<'PYTHON'
+from pathlib import Path
+import subprocess
+b = Path('/private/tmp/monooto-task6-final/arm64-apple-macosx/debug')
+objects = [str(p) for target in ('MonoOtoCore', 'MonoOtoAudio', 'MonoOtoRealtime')
+           for p in (b / (target + '.build')).glob('*.o')]
+subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-g',
+                '-I', str(b / 'Modules'), '-I', str(b / 'MonoOtoRealtime.build'),
+                'docs/verification/Task6PlaybackProbe.swift', *objects,
+                '-o', '/private/tmp/monooto-task6-playback-probe'], check=True)
+PYTHON
+/private/tmp/monooto-task6-playback-probe --list
+```
+
+最小UIを起動し、停止中・機器と耳未選択・−18 dBの初期状態を確認した。最終Releaseビルドでもこの初期状態と再生／確認音の無効状態を再確認した。テストWAVをNSOpenPanelから開き、選択なしでは再生不可、停止状態でseek、Cmd+.で先頭へ戻ることを確認した。実際の機器・耳選択や音声再生は行わず終了した。日本語ラベルと画面配置は確認したが、VoiceOverの全操作は未検証。
+
+残る受け入れ条件は、利用者が選んだ実機での44.1／48 kHzの音楽・確認音、物理端子の反対耳ゼロ、pause／EOF末尾の波形、100 ms以内の新規供給停止、切断／形式変更／スリープ、開始停止1000周期、60分再生、全callback経路の計装、macOS 14.2実機、対象者による知覚評価である。過去のタスク4・5の合格を今回の統合経路の合格へ代用しない。次の一手はこの実機ゲートの確認とし、タスク7以降の拡張で未達を先送りしない。
+
+
+## 2026-09-11 — Task 6 レビュー指摘3件の修正
+
+同じ`codex/task6-playback` worktree、基点`77cebee`の未コミット変更へ次の修正を加えた。対象はPlaybackController、PlaybackWorker、PlayerView、Controller回帰テストとこの記録のみ。
+
+1. 準備中pause→play→stopでworkerのresume待ちが単一driverを塞ぐ問題を修正。再開要求は最新ticketのmailboxへ同期的に置き、workerは既存のcoalesced controlで処理する。Controllerは`resumedTicket`を操作ticket・2秒期限とともにpollする。stopが後続すれば再開待ちを中断して終了確認へ進み、workerがまだ応答しない場合は既存のcleanup期限でerrorになる。終了前の資源は保持する。
+2. ファイルを開く際のmetadata検証sessionには中立な初期設定を使用し、前のL/R単独モードがモノラル音源のopenを拒否しないようにした。モノラルを開いたときのL/R単独は通常monoへ戻し、強さ・周波数・ゲイン／muteは保持する。UIはControllerのmode変更へ同期し、モノラル時のL/R項目を無効にする。
+3. ファイルopen成功時に`confirmationActive`を解除し、確認音から開いたファイルでも停止状態でseekできるようにした。
+
+追加した回帰テスト:
+
+- `testStopSupersedesResumeWhilePreparationIsBlocked`: factory barrierで準備を止め、pause→playの再開待ちへ入ったことをphaseで確認してstop。2.2秒後にerror・出力start=0を確認する。barrier解除後には停止完了と次回の明示再生成功を確認する。
+- `testOpenMonoAfterSingleChannelModePreservesOtherSettings`: L/Rそれぞれからmono音源を開き、channelCount=1、mode=mono、設定とmute保持、再生なし、L/R単独のAPI拒否を確認する。
+- `testOpeningFileDuringToneRestoresSeekingWithoutPlayback`: 確認音からファイルを開き、stopped、canSeek=true、0.1秒seek成功、新規出力startなしを確認する。
+
+修正前は3テストで15 assertionsが失敗し、修正後は3テストすべて成功。主担当の最終検証は以下のとおり。既存のpause PCM一致、停止1000周期、最終経路64条件も全体テストに含まれる。
+
+| 実行 | 結果 | `/private/tmp/` のログ |
+| --- | --- | --- |
+| 回帰RED／GREEN | 3 tests、15 failures → 3 tests、0 failures | `monooto-task6-review-fixes-{red,green}.log` |
+| `swift test --scratch-path /private/tmp/monooto-task6-final` | 157 tests、0 failures | `monooto-task6-review-fixes-full.log` |
+| `swift test --scratch-path /private/tmp/monooto-task6-final-tsan --sanitize thread --filter 'PlaybackWorkerTests|PlaybackControllerTests'` | 47 tests、0 failures | `monooto-task6-review-fixes-tsan.log` |
+| Xcode arm64 Release build（前節と同じ引数） | BUILD SUCCEEDED | `monooto-task6-review-fixes-xcode.log` |
+| `git diff --check` | 成功 | 差分の空白確認 |
+
+別担当のread-only再監査で、resume／parkのticket順序、stop優先、mailboxと実行closureの所有上限、mono設定補正、確認音状態の解除を確認し、追加の確定不具合はなかった。再監査は静的確認で、テスト結果は主担当の実行に集約した。
+
+Releaseアプリの停止起動とL単独の選択を確認した。ただし今回の操作ツールではファイル選択パネルを取得できず、UIでmonoファイルを開く通し確認は未完了。mode補正・設定保持・seekはController回帰で実行済み。検証アプリは終了した。音声の実機出力、物理的pause／EOF、長時間実機ゲートの未検証状態は変わらない。コミット・merge・pushは行っていない。

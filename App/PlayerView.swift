@@ -1,199 +1,187 @@
+import AppKit
 import MonoOtoAudio
 import MonoOtoCore
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// Task 4 host: starting this app never starts an audio graph.
+/// Minimal Task 6 host. Opening a file or selecting an output never starts playback.
 @MainActor
 struct PlayerView: View {
-    @StateObject private var output = DeviceOutput()
-    @State private var playback = PlaybackState()
+    @StateObject private var playback = PlaybackController()
     @State private var devices: [OutputDevice] = []
-    @State private var selectedUID = ""
-    @State private var message = "停止中"
-    @State private var preparation: PlaybackTicket?
-    @State private var preparationTask: Task<Void, Never>?
+    @State private var uid = ""
+    @State private var ear: HearingEar?
+    @State private var fileName = "ファイル未選択"
+    @State private var mode: ListeningMode = .mono
+    @State private var strength: Double = 0.35
+    @State private var cutoff: Double = 1_500
+    @State private var gain: Double = -18
+    @State private var muted = false
+    @State private var seekPosition = 0.0
+    @State private var isSeeking = false
+    @State private var message: String?
+    @State private var actionInFlight = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("MonoOto — 無音の出力経路テスト").font(.title2)
-            Text("この段階では音は再生しません。選択した機器への接続と停止を確認します。")
+        VStack(alignment: .leading, spacing: 16) {
+            Text("MonoOto").font(.title2)
+            Text("片耳でステレオ音源の手がかりを探るプレーヤー")
+            Text("効果は個人差があり検証中です。無理のない音量で、違和感があれば停止してください。")
+                .font(.callout).foregroundStyle(.secondary)
             HStack {
-                Text("音声出力機器").font(.headline)
-                Spacer()
-                Text("\(devices.count) 件").foregroundStyle(.secondary)
-                Button("一覧を更新", action: refresh)
-                    .accessibilityLabel("音声出力機器の一覧を更新")
-            }
-            if devices.isEmpty {
-                ContentUnavailableView {
-                    Label("出力機器が見つかりません", systemImage: "speaker.slash")
-                } description: {
-                    Text("ヘッドホンやオーディオ機器を接続し、「一覧を更新」を押してください。")
-                }
-                .frame(height: 170)
-            } else {
-                ScrollView {
-                    VStack(spacing: 8) {
-                        ForEach(devices) { device in
-                            Button {
-                                guard device.isSupportedForStageA else { return }
-                                stop()
-                                selectedUID = device.uid
-                                message = "\(device.name)を選択しました。開始操作を待っています。"
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: selectedUID == device.uid ? "checkmark.circle.fill" : "circle")
-                                        .foregroundStyle(selectedUID == device.uid ? Color.accentColor : .secondary)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(device.name).font(.body.weight(.medium))
-                                        Text("\(device.channels) ch · \(device.sampleRate.formatted(.number.precision(.fractionLength(0)))) Hz")
-                                            .font(.caption).foregroundStyle(.secondary)
-                                        if !device.isSupportedForStageA {
-                                            Text(unsupportedReason(for: device))
-                                                .font(.caption).foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    Spacer()
-                                    if selectedUID == device.uid { Text("選択中").font(.caption) }
-                                }
-                                .padding(12)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(selectedUID == device.uid ? Color.accentColor.opacity(0.1) : Color.primary.opacity(0.04))
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!device.isSupportedForStageA)
-                            .accessibilityLabel(deviceAccessibilityLabel(device))
-                            .accessibilityValue(selectedUID == device.uid ? "選択中" : "未選択")
-                        }
+                Picker("出力機器", selection: $uid) {
+                    Text("選択してください").tag("")
+                    ForEach(devices.filter(\.isSupportedForStageA)) { device in
+                        Text("\(device.name)（\(Int(device.sampleRate)) Hz）").tag(device.uid)
                     }
-                }
-                .frame(minHeight: 150, maxHeight: 240)
+                }.accessibilityLabel("音声出力機器")
+                Button("一覧を更新", action: refresh).accessibilityLabel("音声出力機器の一覧を更新")
             }
-            if let selected = devices.first(where: { $0.uid == selectedUID }) {
-                Text("出力先: \(selected.name)").font(.callout)
-            } else {
-                Text("出力先を選択してください").foregroundStyle(.secondary)
+            Picker("聞こえる耳", selection: $ear) {
+                Text("選択してください").tag(HearingEar?.none)
+                Text("左耳").tag(HearingEar?.some(.left))
+                Text("右耳").tag(HearingEar?.some(.right))
+            }.accessibilityLabel("音を出力する聞こえる耳")
+            HStack {
+                Button("ファイルを開く", action: openFile).disabled(actionInFlight)
+                Text(fileName).lineLimit(1).truncationMode(.middle)
+                Spacer()
+                Button("確認音") { perform { try await playback.playConfirmationTone() } }
+                    .disabled(actionInFlight || uid.isEmpty || ear == nil)
+                    .accessibilityLabel("選択した耳へ短い確認音を再生")
+            }
+            Text("非DRM WAV / AIFF・モノラルまたはステレオ・44.1 / 48 kHz")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button(playback.phase == .running ? "一時停止" : "再生") {
+                    if playback.phase == .running { playback.pause() }
+                    else { perform { try await playback.play() } }
+                }
+                .disabled(actionInFlight || uid.isEmpty || ear == nil || playback.channelCount == 0 ||
+                          playback.phase == .preparing || playback.phase == .stopping)
+                .accessibilityLabel(playback.phase == .running ? "再生を一時停止" : "選択した音源を再生")
+                Button("停止") { playback.stop() }
+                    .keyboardShortcut(".", modifiers: .command)
+                    .accessibilityLabel("再生を停止して先頭に戻る")
+                Spacer()
+                Text(phaseLabel).accessibilityLabel("再生状態: \(phaseLabel)")
             }
             HStack {
-                Button("選択機器で無音テストを開始", action: startSilence)
-                    .disabled(
-                        output.isRunning || preparation != nil ||
-                        !devices.contains(where: { $0.uid == selectedUID && $0.isSupportedForStageA })
-                    )
-                Button("停止", action: stop)
-                    .keyboardShortcut(".", modifiers: .command)
+                Slider(value: $seekPosition, in: 0...max(0.001, playback.durationSeconds)) { editing in
+                    isSeeking = editing
+                    if !editing { perform { try await playback.seek(seconds: seekPosition) } }
+                }
+                .disabled(actionInFlight || !playback.canSeek || playback.phase == .preparing || playback.phase == .stopping)
+                .accessibilityLabel("再生位置（アプリ供給済み音声の概算）")
+                Text("\(Int(seekPosition)) / \(Int(playback.durationSeconds)) 秒").monospacedDigit()
             }
-            Text(message)
-                .accessibilityLabel("状態: \(message)")
-            TimelineView(.periodic(from: .now, by: 0.5)) { _ in
-                Text("無音コールバック: \(output.callbackCount) 回 / 確認済み機器ID: \(output.verifiedDeviceID.map(String.init) ?? "未接続")")
-                    .font(.caption.monospacedDigit())
+            Picker("比較モード", selection: $mode) {
+                Text("通常モノラル").tag(ListeningMode.mono)
+                Text("音色の手がかり").tag(ListeningMode.cue)
+                Text("入力Lのみ").tag(ListeningMode.leftOnly).disabled(playback.channelCount == 1)
+                Text("入力Rのみ").tag(ListeningMode.rightOnly).disabled(playback.channelCount == 1)
+            }.accessibilityLabel("音源の比較モード。LとRは入力チャンネル")
+            control("手がかりの強さ", value: $strength, range: 0...0.6,
+                    text: strength.formatted(.number.precision(.fractionLength(2))))
+            control("基準周波数", value: $cutoff, range: 800...4_000, text: "\(Int(cutoff)) Hz")
+            control("アプリ内音量", value: $gain, range: -60...0, text: "\(Int(gain)) dB")
+            Toggle("ミュート", isOn: $muted).accessibilityLabel("アプリの音をミュート")
+            if playback.cancellationWarning {
+                Text("位相の影響で音が小さくなる可能性があります。")
+                    .foregroundStyle(.orange).accessibilityLabel("位相による相殺の警告")
             }
-            Text("効果は検証中です。聞こえ方や安全な音圧を保証するものではありません。")
+            if let error = playback.lastError ?? message {
+                Text(error).foregroundStyle(.red).textSelection(.enabled)
+                    .accessibilityLabel("エラー: \(error)")
+            }
+            Text("デジタル出力の制限は、耳元の安全な音圧を保証しません。OSの音量は変更しません。")
                 .font(.footnote).foregroundStyle(.secondary)
         }
-        .padding(24)
-        .frame(minWidth: 560, minHeight: 480)
+        .padding(24).frame(minWidth: 620, minHeight: 600)
         .task { refresh() }
-        .onChange(of: output.isRunning) { _, running in
-            if !running {
-                playback.stop()
-                message = output.lastError ?? "停止中"
-            }
+        .onChange(of: uid) { _, _ in selectOutput() }
+        .onChange(of: ear) { _, _ in selectOutput() }
+        .onChange(of: playback.mode) { _, accepted in mode = accepted }
+        .onChange(of: mode) { old, _ in
+            if !applySettings() { mode = old }
         }
-        .onChange(of: output.lastError) { _, error in
-            if let error { message = error }
-        }
-        .onDisappear { stop(); output.dispose() }
+        .onChange(of: strength) { _, _ in _ = applySettings() }
+        .onChange(of: cutoff) { _, _ in _ = applySettings() }
+        .onChange(of: gain) { _, _ in _ = applySettings() }
+        .onChange(of: muted) { _, _ in _ = applySettings() }
+        .onChange(of: playback.positionSeconds) { _, position in if !isSeeking { seekPosition = position } }
+        .onDisappear { playback.stop() }
     }
 
+    private func control(_ label: String, value: Binding<Double>, range: ClosedRange<Double>, text: String) -> some View {
+        HStack {
+            Text(label).frame(width: 130, alignment: .leading)
+            Slider(value: value, in: range).accessibilityLabel(label)
+            Text(text).monospacedDigit().frame(width: 80, alignment: .trailing)
+        }
+    }
+    private var phaseLabel: String {
+        switch playback.phase {
+        case .stopped: "停止中"
+        case .preparing: "準備中"
+        case .running: "再生中"
+        case .paused: "一時停止中"
+        case .stopping: "停止処理中"
+        case .error: "エラー"
+        }
+    }
     private func refresh() {
-        stop()
+        playback.stop()
         do {
-            devices = try DeviceOutput.availableDevices().sorted {
-                $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            devices = try DeviceOutput.availableDevices().sorted { $0.name < $1.name }
+            if !devices.contains(where: { $0.uid == uid && $0.isSupportedForStageA }) { uid = "" }
+            message = devices.contains(where: \.isSupportedForStageA) ? nil : "対応する2チャンネル出力機器を接続してください。"
+        } catch { message = "出力機器を取得できません。接続を確認してください。" }
+    }
+    private func selectOutput() {
+        playback.stop()
+        if let ear, !uid.isEmpty { playback.selectOutput(uid: uid, ear: ear) }
+    }
+    private func openFile() {
+        guard !actionInFlight else { return }
+        actionInFlight = true
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.wav, .aiff]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { actionInFlight = false; return }
+            Task { @MainActor in
+                defer { actionInFlight = false }
+                do { try await playback.open(url: url); fileName = url.lastPathComponent; message = nil }
+                catch { message = "音源を開けません。対応形式を確認してください。" }
             }
-            if !devices.contains(where: { $0.uid == selectedUID }) { selectedUID = "" }
-            message = devices.isEmpty ? "対応する出力機器が見つかりません" : "機器を選択して開始してください"
+        }
+    }
+    @discardableResult private func applySettings() -> Bool {
+        do {
+            try playback.set(mode: mode, parameters: .init(strength: Float(strength), cutoffHz: Float(cutoff)),
+                             gainDB: muted ? nil : Float(gain))
+            message = nil
+            return true
         } catch {
-            devices = []
-            selectedUID = ""
-            message = "音声機器を取得できません。接続を確認してください。"
+            mode = playback.mode
+            strength = Double(playback.parameters.strength)
+            cutoff = Double(playback.parameters.cutoffHz)
+            muted = playback.gainDB == nil
+            if let acceptedGain = playback.gainDB { gain = Double(acceptedGain) }
+            message = "設定を適用できません。表示を前の設定に戻しました。"
+            return false
         }
     }
-
-    private func startSilence() {
-        guard preparation == nil else { return }
-        guard let device = devices.first(where: {
-            $0.uid == selectedUID && $0.isSupportedForStageA
-        }) else { return }
-        let ticket = playback.beginPreparation()
-        preparation = ticket
-        message = "出力機器を準備しています。停止操作で取り消せます。"
-        preparationTask = Task { @MainActor in
-            defer {
-                if preparation == ticket {
-                    preparation = nil
-                    preparationTask = nil
-                }
-            }
-            // A queued task invalidated by Stop must not tear down a newer output.
-            guard preparation == ticket else { return }
-            do {
-                try Task.checkCancellation()
-                try await output.prepare(uid: device.uid, sampleRate: device.sampleRate)
-                // A cancelled older preparation must not stop or relabel the current generation.
-                guard preparation == ticket else { return }
-                try Task.checkCancellation()
-                guard playback.finishPreparation(ticket) else {
-                    abortStart(message: "準備が取り消されたため停止しました。")
-                    return
-                }
-                try output.startSilence()
-                guard playback.start(ticket) else {
-                    abortStart(message: "開始が取り消されたため停止しました。")
-                    return
-                }
-                message = "無音テスト中（\(device.name)）"
-            } catch {
-                guard preparation == ticket else { return }
-                if Task.isCancelled {
-                    abortStart(message: "準備が取り消されたため停止しました。")
-                    return
-                }
-                output.stop()
-                playback.stop()
-                message = output.lastError ?? "開始できません。選択機器の接続と形式を確認してください。"
-            }
+    private func perform(_ action: @escaping @MainActor () async throws -> Void) {
+        guard !actionInFlight else { return }
+        actionInFlight = true
+        Task { @MainActor in
+            defer { actionInFlight = false }
+            do { try await action(); message = nil }
+            catch is CancellationError { }
+            catch { message = "操作を完了できません。出力先と音源を確認してください。" }
         }
-    }
-
-    private func stop() {
-        preparationTask?.cancel()
-        preparationTask = nil
-        preparation = nil
-        playback.stop()
-        output.stop()
-        message = "停止中"
-    }
-
-    private func abortStart(message: String) {
-        playback.stop()
-        output.stop()
-        self.message = message
-    }
-
-    private func unsupportedReason(for device: OutputDevice) -> String {
-        if device.channels != 2 { return "非対応：2チャンネル出力ではありません" }
-        return "非対応：44.1 kHzまたは48 kHzではありません"
-    }
-
-    private func deviceAccessibilityLabel(_ device: OutputDevice) -> String {
-        let format = "\(device.channels)チャンネル、\(device.sampleRate.formatted())ヘルツ"
-        return device.isSupportedForStageA
-            ? "\(device.name)、\(format)"
-            : "\(device.name)、\(format)、\(unsupportedReason(for: device))"
     }
 }

@@ -17,7 +17,10 @@ typedef struct {
  * No gain or conversion: finite samples within Float32(pow(10,-3/20)) retain bits.
  * Exactly one producer owns push; exactly one consumer owns render. Control may
  * concurrently silence/read stats. Destroy only after ALL callers have finished.
- * Silence is irreversible, not a join; create a new queue for a new generation.
+ * Silence is irreversible, not a join; create a new queue for a new audio session
+ * (stop/seek/input/output replacement). Pause retains this queue and pending PCM;
+ * a separate reversible render hold must prevent consumption without silence.
+ * Updating a control-operation ticket alone does not create a new audio session.
  */
 MOFrameQueue *mo_queue_create(uint32_t capacity, unsigned ear);
 void mo_queue_destroy(MOFrameQueue *q);

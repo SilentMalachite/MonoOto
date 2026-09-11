@@ -51,6 +51,19 @@ public final class PlaybackState {
         return true
     }
 
+    public func beginStopping() -> PlaybackTicket {
+        invalidateCurrentTicket()
+        phase = .stopping
+        return PlaybackTicket(generation: generation)
+    }
+
+    @discardableResult
+    public func finishStopping(_ ticket: PlaybackTicket, paused: Bool = false) -> Bool {
+        guard ticket.generation == generation, phase == .stopping else { return false }
+        phase = paused ? .paused : .stopped
+        return true
+    }
+
     public func stop() {
         invalidateCurrentTicket()
         phase = .stopped

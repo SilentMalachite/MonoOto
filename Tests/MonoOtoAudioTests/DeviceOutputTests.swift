@@ -1,4 +1,5 @@
 import XCTest
+import MonoOtoRealtime
 import AVFAudio
 import AudioToolbox
 @testable import MonoOtoAudio
@@ -15,6 +16,63 @@ final class DeviceOutputTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? DeviceOutputError, expected, file: file, line: line)
         }
+    }
+
+    @MainActor func testFailureClosesPCMBeforeControllerNotification() async throws {
+        let backend = FakeOutputBackend()
+        let output = DeviceOutput(backend: backend)
+        let owner = try PlaybackRenderOwner(ear: .right)
+        try await output.prepare(uid: "headphones", sampleRate: 48000, renderOwner: owner)
+        try output.startPlayback()
+        let notified = expectation(description: "failure delivered after silence")
+        output.onFailure = { message in
+            XCTAssertTrue(owner.stats.silenced)
+            XCTAssertFalse(backend.isRunning)
+            XCTAssertFalse(message.isEmpty)
+            notified.fulfill()
+        }
+        backend.handler?(.deviceChanged)
+        await fulfillment(of: [notified], timeout: 1)
+        try await output.waitUntilStopped()
+    }
+
+    @MainActor func testPlaybackPauseRetainsEngineAndRejectsChangedResume() async throws {
+        let backend = FakeOutputBackend()
+        let output = DeviceOutput(backend: backend)
+        let owner = try PlaybackRenderOwner(ear: .left)
+        try await output.prepare(uid: "headphones", sampleRate: 48000, renderOwner: owner)
+        try output.startPlayback()
+        output.pausePlayback()
+        XCTAssertTrue(mo_render_context_read_stats(owner.context).held)
+        XCTAssertEqual(backend.configureCount, 1)
+        try output.resumePlayback()
+        XCTAssertEqual(backend.configureCount, 1)
+        output.pausePlayback()
+        backend.report.deviceID = 99
+        XCTAssertThrowsError(try output.resumePlayback())
+        XCTAssertTrue(owner.stats.silenced)
+    }
+
+    @MainActor func testOwnerOutlivesSourceLeaseBeforeRenderEntry() async throws {
+        let backend = FakeOutputBackend()
+        let output = DeviceOutput(backend: backend)
+        var owner: PlaybackRenderOwner? = try PlaybackRenderOwner(ear: .left)
+        weak var observed = owner
+        try await output.prepare(uid: "headphones", sampleRate: 48000, renderOwner: owner)
+        try output.startPlayback()
+        var callback: (() -> Void)? = backend.retainCallback()
+        backend.completionAllowed = false
+        output.stop()
+        owner = nil
+        XCTAssertNotNil(observed)
+        let wait = Task { try await output.waitUntilStopped() }
+        await Task.yield()
+        XCTAssertNotNil(observed, "active=0 cannot replace backend completion")
+        callback?()
+        callback = nil
+        backend.completionAllowed = true
+        try await wait.value
+        XCTAssertNil(observed)
     }
 
     @MainActor func testConfigurationWaitConsumesOnlyFirstNotification() async throws {
@@ -526,6 +584,20 @@ final class DeviceOutputTests: XCTestCase {
 
 @MainActor private final class FakeOutputBackend: DeviceOutputBackend {
     var callbackCount: UInt64 = 0
+    var completionAllowed = true
+    private var renderLease: PlaybackRenderLease?
+    var renderCompletionConfirmed: Bool {
+        completionAllowed && (renderLease == nil || isKnownUniquelyReferenced(&renderLease))
+    }
+    func retainCallback() -> () -> Void {
+        let lease = renderLease!
+        return {
+            // Deliberately entered after stop, while the mock backend still owns the source closure.
+            XCTAssertTrue(lease.owner.stats.silenced)
+            XCTAssertEqual(mo_render_context_read_stats(lease.owner.context).active_callbacks, 0)
+        }
+    }
+    var drainDuration: TimeInterval = 0
     var devices = [OutputDevice(uid: "headphones", name: "Headphones", sampleRate: 48000, channels: 2, deviceID: 7)]
     var report = DeviceOutputSnapshot(deviceID: 7, sampleRate: 48000, channels: 2, isStereo: true)
     var handler: (@MainActor @Sendable (DeviceOutputEvent) -> Void)?
@@ -539,8 +611,9 @@ final class DeviceOutputTests: XCTestCase {
     var configureHook: (() async throws -> Void)?
     var disposeHook: (() -> Void)?
     func availableDevices() throws -> [OutputDevice] { devices }
-    func configure(device: OutputDevice, sampleRate: Double, onEvent: @escaping @MainActor @Sendable (DeviceOutputEvent) -> Void) async throws {
+    func configure(device: OutputDevice, sampleRate: Double, renderOwner: PlaybackRenderOwner?, onEvent: @escaping @MainActor @Sendable (DeviceOutputEvent) -> Void) async throws {
         configureCount += 1
+        renderLease = renderOwner.map(PlaybackRenderLease.init)
         handler = onEvent
         try await configureHook?()
         if failConfiguration { throw DeviceOutputError.unavailable }
@@ -549,7 +622,7 @@ final class DeviceOutputTests: XCTestCase {
     func start() throws { isRunning = true; startCount += 1; if changeOnStart { report.deviceID = 99 } }
     func stop() { isRunning = false; stopCount += 1 }
     func dispose() { isRunning = false; disposeCount += 1; handler = nil; disposeHook?() }
-    func resetDiagnostics() { callbackCount = 0 }
+    func resetDiagnostics() { callbackCount = 0; if renderCompletionConfirmed { renderLease = nil } }
 }
 
 // Exclusive handoff: initialized/read on main, then only the release worker mutates output.

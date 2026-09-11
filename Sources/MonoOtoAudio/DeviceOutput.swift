@@ -4,6 +4,34 @@ import AudioToolbox
 import Combine
 import CoreAudio
 import Darwin
+import MonoOtoCore
+import MonoOtoRealtime
+
+/// Immutable C resource identities; producer, source lease and control retain this owner.
+/// All mutable pointees use C11 atomics; final release occurs on control after both joins.
+final class PlaybackRenderOwner: @unchecked Sendable {
+    let queue: OpaquePointer
+    let context: OpaquePointer
+    init(capacity: UInt32 = 4096, ear: HearingEar) throws {
+        guard let queue = mo_queue_create(capacity, ear == .left ? 0 : 1) else { throw DeviceOutputError.unavailable }
+        guard let context = mo_render_context_create(queue) else {
+            mo_queue_destroy(queue); throw DeviceOutputError.unavailable
+        }
+        self.queue = queue; self.context = context
+    }
+    deinit { mo_render_context_destroy(context); mo_queue_destroy(queue) }
+    func hold() { _ = mo_render_context_set_hold(context, true) }
+    func resume() -> Bool { mo_render_context_set_hold(context, false) }
+    func silence() { hold(); mo_queue_silence(queue) }
+    var stats: MOQueueStats { mo_queue_read_stats(queue) }
+}
+
+/// Control retains this separately from the source closure. After graph destruction,
+/// uniqueness proves the closure no longer owns it; active=0 alone is insufficient.
+final class PlaybackRenderLease: @unchecked Sendable {
+    let owner: PlaybackRenderOwner
+    init(_ owner: PlaybackRenderOwner) { self.owner = owner }
+}
 
 public struct OutputDevice: Identifiable, Equatable, Sendable {
     public var id: String { uid }
@@ -113,8 +141,10 @@ enum DeviceOutputError: LocalizedError, Equatable {
 /// Each backend is exclusively owned by one DeviceOutput; do not share an injected backend between owners.
 @MainActor protocol DeviceOutputBackend: AnyObject, Sendable {
     var callbackCount: UInt64 { get }
+    var renderCompletionConfirmed: Bool { get }
+    var drainDuration: TimeInterval { get }
     func availableDevices() throws -> [OutputDevice]
-    func configure(device: OutputDevice, sampleRate: Double,
+    func configure(device: OutputDevice, sampleRate: Double, renderOwner: PlaybackRenderOwner?,
                    onEvent: @escaping @MainActor @Sendable (DeviceOutputEvent) -> Void) async throws
     func snapshot() throws -> DeviceOutputSnapshot
     func start() throws
@@ -134,18 +164,28 @@ enum DeviceOutputError: LocalizedError, Equatable {
     private var generation: UInt64 = 0
     private var prepared: OutputDevice?
     private var requestedRate: Double = 0
+    private var renderOwner: PlaybackRenderOwner?
+    var onFailure: (@MainActor @Sendable (String) -> Void)?
+    var drainDuration: TimeInterval { backend.drainDuration }
 
     public convenience init() { self.init(backend: CoreAudioOutputBackend()) }
     init(backend: any DeviceOutputBackend) { self.backend = backend }
     deinit {
         let backend = backend
-        // On macOS the main thread is MainActor's executor. Avoid leaving live hardware
-        // behind until another task runs when the last reference is released here.
-        if Thread.isMainThread {
-            MainActor.assumeIsolated { backend.dispose() }
-        } else {
-            Task { @MainActor in backend.dispose() }
+        let owner = renderOwner
+        let dispose: @MainActor @Sendable () -> Void = {
+            owner?.silence()
+            backend.dispose()
+            // Keep backend/lease alive until the closure has relinquished ownership.
+            Task { @MainActor in
+                while !backend.renderCompletionConfirmed {
+                    try? await Task.sleep(for: .milliseconds(2))
+                }
+                withExtendedLifetime(owner) {}
+            }
         }
+        if Thread.isMainThread { MainActor.assumeIsolated { dispose() } }
+        else { Task { @MainActor in dispose() } }
     }
 
     public static func availableDevices() throws -> [OutputDevice] {
@@ -153,11 +193,18 @@ enum DeviceOutputError: LocalizedError, Equatable {
     }
 
     public func prepare(uid: String, sampleRate: Double) async throws {
+        try await prepare(uid: uid, sampleRate: sampleRate, renderOwner: nil)
+    }
+
+    func prepare(uid: String, sampleRate: Double, renderOwner: PlaybackRenderOwner?) async throws {
         stop()
-        backend.resetDiagnostics()
         lastError = nil
         let ticket = generation
         do {
+            try await waitUntilStopped()
+            guard generation == ticket else { throw DeviceOutputError.stale }
+            backend.resetDiagnostics()
+            self.renderOwner = renderOwner
             try Task.checkCancellation()
             guard sampleRate.isFinite, sampleRate == 44100 || sampleRate == 48000 else {
                 throw DeviceOutputError.unsupportedFormat
@@ -169,7 +216,7 @@ enum DeviceOutputError: LocalizedError, Equatable {
             guard device.channels == 2, device.sampleRate == sampleRate else {
                 throw DeviceOutputError.unsupportedFormat
             }
-            try await backend.configure(device: device, sampleRate: sampleRate) { [weak self, weak backend = self.backend] event in
+            try await backend.configure(device: device, sampleRate: sampleRate, renderOwner: renderOwner) { [weak self, weak backend = self.backend] event in
                 guard let self else {
                     // An off-actor last release can leave disposal queued. A delivered fault
                     // must still stop this owner's backend; the weak capture avoids a cycle.
@@ -179,6 +226,7 @@ enum DeviceOutputError: LocalizedError, Equatable {
                 guard self.generation == ticket else { return }
                 self.stop()
                 self.lastError = (event == .renderFault ? DeviceOutputError.invalidBuffer : .changed).localizedDescription
+                self.onFailure?(self.lastError!)
             }
             guard generation == ticket else { throw DeviceOutputError.stale }
             try Task.checkCancellation()
@@ -205,7 +253,42 @@ enum DeviceOutputError: LocalizedError, Equatable {
         } catch { fail(error); throw error }
     }
 
+    func startPlayback() throws {
+        do {
+            guard let owner = renderOwner, let device = prepared, !isRunning else { throw DeviceOutputError.stale }
+            try validate(device: device, sampleRate: requestedRate)
+            try startSilence()
+            guard owner.resume() else { throw DeviceOutputError.invalidBuffer }
+        } catch { fail(error); throw error }
+    }
+    func pausePlayback() {
+        renderOwner?.hold()
+        backend.stop()
+        isRunning = false
+    }
+    func waitUntilPaused() async throws {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while let owner = renderOwner, mo_render_context_read_stats(owner.context).active_callbacks != 0 {
+            guard ContinuousClock.now < deadline else { throw DeviceOutputError.configurationTimeout }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+    }
+    func resumePlayback() throws { try startPlayback() }
+    func waitUntilStopped() async throws {
+        let ticket = generation
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !backend.renderCompletionConfirmed {
+            guard ContinuousClock.now < deadline else { throw DeviceOutputError.configurationTimeout }
+            try await Task.sleep(for: .milliseconds(2))
+            guard generation == ticket else { throw DeviceOutputError.stale }
+        }
+        guard generation == ticket else { throw DeviceOutputError.stale }
+        backend.resetDiagnostics()
+        renderOwner = nil
+    }
+
     public func stop() {
+        renderOwner?.silence()
         generation &+= 1
         backend.stop()
         backend.dispose()
@@ -239,8 +322,20 @@ enum DeviceOutputError: LocalizedError, Equatable {
     private var configurationWait: DeviceConfigurationWait?
     private var sleepObserver: NSObjectProtocol?
     private var diagnosticTimer: DispatchSourceTimer?
-    private var renderState: SilenceRenderState?
-    var callbackCount: UInt64 { renderState?.callbackCount ?? 0 }
+    private var lease: PlaybackRenderLease?
+    private var detached = true
+    var callbackCount: UInt64 { lease.map { mo_render_context_read_stats($0.owner.context).entries } ?? 0 }
+    var renderCompletionConfirmed: Bool {
+        guard detached else { return false }
+        guard lease != nil else { return true }
+        guard isKnownUniquelyReferenced(&lease), let lease else { return false }
+        return mo_render_context_read_stats(lease.owner.context).active_callbacks == 0
+    }
+    var drainDuration: TimeInterval {
+        guard let engine, let snapshot = try? snapshot() else { return 0 }
+        let frames: UInt32 = (try? Self.scalar(snapshot.deviceID, kAudioDevicePropertyBufferFrameSize, initial: UInt32(0))) ?? 0
+        return max(0, engine.outputNode.presentationLatency) + Double(frames) / snapshot.sampleRate
+    }
 
     func availableDevices() throws -> [OutputDevice] { try Self.devices() }
 
@@ -270,7 +365,7 @@ enum DeviceOutputError: LocalizedError, Equatable {
         }
     }
 
-    func configure(device: OutputDevice, sampleRate: Double,
+    func configure(device: OutputDevice, sampleRate: Double, renderOwner: PlaybackRenderOwner?,
                    onEvent: @escaping @MainActor @Sendable (DeviceOutputEvent) -> Void) async throws {
         try Task.checkCancellation()
         dispose()
@@ -336,13 +431,17 @@ enum DeviceOutputError: LocalizedError, Equatable {
         guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else {
             throw DeviceOutputError.unsupportedFormat
         }
-        let state = SilenceRenderState()
-        renderState = state
+        let owner = try renderOwner ?? PlaybackRenderOwner(capacity: 1, ear: .left)
+        let lease = PlaybackRenderLease(owner)
+        self.lease = lease
+        detached = false
         // The closure owns one immutable state reference. Rendering only touches atomic primitive
         // storage; its last reference is released on the control side after stop and detach.
         let node = AVAudioSourceNode(format: format) { @Sendable isSilence, _, frames, buffers in
-            isSilence.pointee = true
-            return state.render(frames: frames, buffers: buffers)
+            var silent = false
+            let result = mo_render_context_render(lease.owner.context, buffers, frames, &silent)
+            isSilence.pointee = ObjCBool(silent)
+            return result == MO_RENDER_FAULT ? kAudio_ParamError : noErr
         }
         source = node
         graph.attach(node)
@@ -353,7 +452,7 @@ enum DeviceOutputError: LocalizedError, Equatable {
         timer.schedule(deadline: .now() + .milliseconds(20), repeating: .milliseconds(20))
         timer.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
-                guard self?.renderState?.hasFault == true else { return }
+                guard let owner = self?.lease?.owner, mo_render_context_read_stats(owner.context).faulted else { return }
                 onEvent(.renderFault)
             }
         }
@@ -379,8 +478,9 @@ enum DeviceOutputError: LocalizedError, Equatable {
         guard engine.isRunning else { throw DeviceOutputError.unavailable }
     }
     func stop() { engine?.stop() }
-    func resetDiagnostics() { renderState = nil }
+    func resetDiagnostics() { if renderCompletionConfirmed { lease = nil } }
     func dispose() {
+        lease?.owner.silence()
         configurationWait?.cancel()
         configurationWait = nil
         engine?.stop()
@@ -398,6 +498,7 @@ enum DeviceOutputError: LocalizedError, Equatable {
         if let source { engine?.detach(source) }
         source = nil
         engine = nil
+        detached = true
         // Retain the stopped state until the next prepare: diagnostics must detect any late callbacks.
     }
 

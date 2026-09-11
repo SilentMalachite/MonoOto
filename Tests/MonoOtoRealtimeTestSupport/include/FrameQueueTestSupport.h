@@ -4,4 +4,6 @@
 int mo_test_concurrent_order(void);
 int mo_test_lifecycle(void);
 int mo_test_injected_contracts(void);
+/* phase 1: after C entry; phase 2: after queue return. Both hold and silence. */
+int mo_test_render_context_barriers(unsigned phase);
 #endif

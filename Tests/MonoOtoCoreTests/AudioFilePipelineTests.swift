@@ -46,6 +46,55 @@ final class AudioFilePipelineTests: XCTestCase {
         return pipeline
     }
 
+    private func confirmationSample(_ index: Int) -> Float {
+        let taper = min(1, Float(23_999 - index) / 960)
+        return Float(sin(2 * Double.pi * 500 * Double(index) / 48_000)) * 0.1 * taper
+    }
+
+    func testConfirmationToneMatchesFilePCMForEveryModeRateAndGain() throws {
+        let url = try fixture(frames: 24_000, sample: { i, _ in self.confirmationSample(i) })
+        for rate in [44_100.0, 48_000.0] {
+            for mode in [ListeningMode.mono, .cue, .leftOnly, .rightOnly] {
+                for gain: Float? in [-18, 0, nil] {
+                    let tone = try AudioFilePipeline(confirmationToneOutputRate: rate)
+                    XCTAssertEqual(tone.sourceRate, 48_000)
+                    XCTAssertEqual(tone.channelCount, 2)
+                    XCTAssertEqual(tone.sourceFrameCount, 24_000)
+                    try tone.set(mode: mode, parameters: parameters, gainDB: gain)
+                    tone.reset()
+                    let actual = try collect(tone, block: 17)
+                    let expected = try collect(prepare(url, rate: rate, mode: mode, gain: gain), block: 1_024)
+                    XCTAssertEqual(actual.map(\.bitPattern), expected.map(\.bitPattern))
+                    XCTAssertTrue(actual.allSatisfy { $0.isFinite && abs($0) <= Float(pow(10.0, -3.0 / 20)) })
+                    if gain == nil { XCTAssertTrue(actual.allSatisfy { $0 == 0 }) }
+                    else { XCTAssertGreaterThan(actual.map(abs).max() ?? 0, 0.01) }
+                }
+            }
+        }
+    }
+
+    func testConfirmationToneSeekResetAndOutputRateValidation() throws {
+        for rate in [44_100.0, 48_000.0] {
+            let tone = try AudioFilePipeline(confirmationToneOutputRate: rate)
+            let original = try collect(tone)
+            XCTAssertLessThanOrEqual(abs(original.count - tone.latencyFrames - Int(rate / 2)), 2)
+            tone.reset()
+            _ = try tone.read(maxFrames: 19)
+            try tone.seek(sourceFrame: 19_123)
+            let suffix = try fixture(frames: 4_877, sample: { i, _ in self.confirmationSample(i + 19_123) })
+            XCTAssertEqual(try collect(tone), try collect(AudioFilePipeline(url: suffix, outputRate: rate)))
+            try tone.seek(sourceFrame: 24_000)
+            XCTAssertTrue(try collect(tone).isEmpty)
+            tone.reset()
+            XCTAssertEqual(try collect(tone), original)
+            XCTAssertThrowsError(try tone.seek(sourceFrame: -1))
+            XCTAssertThrowsError(try tone.seek(sourceFrame: 24_001))
+        }
+        for rate in [Double.nan, .infinity, 0, 96_000] {
+            XCTAssertThrowsError(try AudioFilePipeline(confirmationToneOutputRate: rate))
+        }
+    }
+
     // Detect wrong channel mixing, missing start fade, gain bypass, delayed/lost final samples.
     func testIndependentOfflineReferenceAndCueFormula() throws {
         let url = try fixture(sample: { i, c in Float(sin(Double(i) * (c == 0 ? 0.07 : 0.13))) * 0.2 })

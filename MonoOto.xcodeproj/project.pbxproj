@@ -4,6 +4,12 @@
 	classes = {};
 	objectVersion = 56;
 	objects = {
+		A60000000000000000000003 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/MonoOtoAudioTests/PlaybackWorkerTests.swift"; sourceTree = "<group>"; };
+		B60000000000000000000003 = { isa = PBXBuildFile; fileRef = A60000000000000000000003; };
+		A60000000000000000000002 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/MonoOtoAudioTests/PlaybackTestSupport.swift"; sourceTree = "<group>"; };
+		B60000000000000000000002 = { isa = PBXBuildFile; fileRef = A60000000000000000000002; };
+		A60000000000000000000001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Tests/MonoOtoAudioTests/PlaybackControllerTests.swift"; sourceTree = "<group>"; };
+		B60000000000000000000001 = { isa = PBXBuildFile; fileRef = A60000000000000000000001; };
 		54D5F5792E376EF9B3B82FC9 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/MonoOtoApp.swift"; sourceTree = "<group>"; };
 		EA421144026626017C517B3F = { isa = PBXBuildFile; fileRef = 54D5F5792E376EF9B3B82FC9; };
 		D6DFBFCDF60A1CEA5392F2C0 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/PlayerView.swift"; sourceTree = "<group>"; };
@@ -21,7 +27,7 @@
 		8BCD5BC4CDFDF0918087C782 = { isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MonoOto.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F219C0274590DA45E4BEF1EA = { isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MonoOtoHostTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBDC4F23F93125BBEEAE800C = { isa = PBXGroup; children = (8BCD5BC4CDFDF0918087C782, F219C0274590DA45E4BEF1EA,); name = Products; sourceTree = "<group>"; };
-		F97E10D1020E3BEF961AF77B = { isa = PBXGroup; children = (54D5F5792E376EF9B3B82FC9, D6DFBFCDF60A1CEA5392F2C0, BF7D0059C36EFA3E856E6A55, 02C2758958AA581F69252661, A10000000000000000000001, A10000000000000000000002, A10000000000000000000003, FBDC4F23F93125BBEEAE800C,); sourceTree = "<group>"; };
+		F97E10D1020E3BEF961AF77B = { isa = PBXGroup; children = (A60000000000000000000001, A60000000000000000000002, A60000000000000000000003, 54D5F5792E376EF9B3B82FC9, D6DFBFCDF60A1CEA5392F2C0, BF7D0059C36EFA3E856E6A55, 02C2758958AA581F69252661, A10000000000000000000001, A10000000000000000000002, A10000000000000000000003, FBDC4F23F93125BBEEAE800C,); sourceTree = "<group>"; };
 		C27E4B6BEEEBEE564F55E421 = { isa = XCLocalSwiftPackageReference; relativePath = .; };
 		82C6AA05EF2FD22604EA1A72 = { isa = XCSwiftPackageProductDependency; productName = MonoOtoCore; };
 		1CBD0EBC28D259B0319E32B5 = { isa = PBXBuildFile; productRef = 82C6AA05EF2FD22604EA1A72; };
@@ -35,7 +41,7 @@
 		B0AD7560DD90869F17D9AD3E = { isa = PBXBuildFile; productRef = 8A541B461610A518B4A527F8; };
 		190512B372C676361346630D = { isa = XCSwiftPackageProductDependency; productName = MonoOtoAudio; };
 		E01BA76B29A7396AF0B9CE2F = { isa = PBXBuildFile; productRef = 190512B372C676361346630D; };
-		87578F7D47DE44A504256C73 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (F191789379728EB27716A50B, 56FD48A4C3C7C16AA0E44B0E, B10000000000000000000001, B10000000000000000000002, B10000000000000000000003,); runOnlyForDeploymentPostprocessing = 0; };
+		87578F7D47DE44A504256C73 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (F191789379728EB27716A50B, 56FD48A4C3C7C16AA0E44B0E, B10000000000000000000001, B10000000000000000000002, B10000000000000000000003, B60000000000000000000001, B60000000000000000000002, B60000000000000000000003,); runOnlyForDeploymentPostprocessing = 0; };
 		32BD75FE04B3CDF992A510FD = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (B0AD7560DD90869F17D9AD3E, E01BA76B29A7396AF0B9CE2F,); runOnlyForDeploymentPostprocessing = 0; };
 		1544DFBBD36E4A0D68754A27 = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		EB441FB4F42650CB3146523A = { isa = PBXNativeTarget; buildConfigurationList = 543C3B0A949D06459825C125; buildPhases = (87578F7D47DE44A504256C73, 32BD75FE04B3CDF992A510FD, 1544DFBBD36E4A0D68754A27,); buildRules = (); dependencies = (); name = MonoOtoHostTests; packageProductDependencies = (8A541B461610A518B4A527F8, 190512B372C676361346630D,); productName = MonoOtoHostTests; productReference = F219C0274590DA45E4BEF1EA; productType = "com.apple.product-type.bundle.unit-test"; };

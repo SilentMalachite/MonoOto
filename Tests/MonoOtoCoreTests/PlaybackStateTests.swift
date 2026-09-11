@@ -3,6 +3,41 @@ import XCTest
 
 final class PlaybackStateTests: XCTestCase {
     @MainActor
+    func testStopRemainsStoppingUntilMatchingAcknowledgement() {
+        let state = PlaybackState()
+        let running = state.beginPreparation()
+        XCTAssertTrue(state.finishPreparation(running))
+        XCTAssertTrue(state.start(running))
+        let stop = state.beginStopping()
+        XCTAssertEqual(state.phase, .stopping)
+        XCTAssertFalse(state.start(running))
+        XCTAssertTrue(state.finishStopping(stop))
+        XCTAssertEqual(state.phase, .stopped)
+        XCTAssertFalse(state.finishStopping(stop, paused: true))
+    }
+
+    @MainActor
+    func testStaleStopAcknowledgementCannotStopNewPreparation() {
+        let state = PlaybackState()
+        let old = state.beginStopping()
+        let current = state.beginPreparation()
+        XCTAssertFalse(state.finishStopping(old))
+        XCTAssertEqual(state.phase, .preparing)
+        XCTAssertTrue(state.finishPreparation(current))
+        XCTAssertTrue(state.start(current))
+    }
+
+    @MainActor
+    func testPauseAcknowledgementPreservesSeparateOperationTicket() {
+        let state = PlaybackState()
+        let first = state.beginStopping()
+        let latest = state.beginStopping()
+        XCTAssertFalse(state.finishStopping(first, paused: true))
+        XCTAssertTrue(state.finishStopping(latest, paused: true))
+        XCTAssertEqual(state.phase, .paused)
+    }
+
+    @MainActor
     func testPreparationMustFinishBeforeCurrentTicketCanStart() {
         let state = PlaybackState()
 
