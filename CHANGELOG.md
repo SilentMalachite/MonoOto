@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- C11 bounded frame queue with partial-push handling, fault latching, and per-ear output.
+- Task 6 file playback through a single worker, validated C render boundary, and serialized playback controller.
+- Pause that retains queued PCM and processing state, stop/seek handling, and an in-memory confirmation tone through the common output path.
+- Playback lifecycle, PCM continuity, routing/mute, and sanitizer regression tests; a diagnostic playback probe and explicit hardware-validation limits.
+
 - Reproducible Task 4 silent-route probes and diagnostic-only render-lifetime instrumentation, with hardware verification records for USB 44.1/48 kHz.
 
 - Deterministic stereo-to-mono cue encoder with cancellation diagnostics.
@@ -17,12 +22,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - WAV and AIFF validation, decoding, conversion, and bounded reads.
 - Generation-based playback-state handling that rejects stale completions.
 - Explicit Core Audio output-device discovery, pinning, format readback, silent rendering, and change monitoring.
-- SwiftUI host for listing and selecting supported output devices and explicitly starting a silent route test.
+- Minimal SwiftUI player with explicit device/ear selection, file controls, mode and gain settings, confirmation tone, and Japanese accessibility labels.
 - Swift Package and shared Xcode scheme tests for DSP, file handling, state, and the output boundary.
 - Engineering verification log that separates automated results from unverified hardware behavior.
 - English canonical and Japanese-translated public project documentation.
 
 ### Fixed
+
+- Allow Stop to supersede a resume request blocked behind worker preparation, while retaining resources until completion is confirmed.
+- Open mono files independently of the previous L/R-only mode, reset only that incompatible mode, and preserve gain/mute and cue parameters.
+- Restore file seeking when a file is opened during the confirmation tone.
 
 - Await the initial engine configuration notification before connecting a different-format route, with a bounded timeout and format readback.
 - Stop previous output for cancelled preparation, reject stale UI tasks, and prioritize cancellation over a queued timeout.

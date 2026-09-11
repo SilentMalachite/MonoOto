@@ -4,15 +4,17 @@
 
 **Goal:** SPECの段階Aとして、通常モノラルと音色手がかり付き再生を比較できるmacOSアプリを作り、工学的な成立と当事者の音楽体験を別々に検証する。
 
-**Architecture（段階A全体の目標、キュー・再生統合は未実装）:** 音声のデコード・DSP・レート変換は制御されたワーカー上で処理し、最終ピーク制限済みPCMを有界キューへ渡す。AVAudioSourceNodeのコールバックは事前確保されたPCMの取り出しと片耳への出力に限定する。DSPをオフラインテストとアプリで共有し、システム音声取得は知覚評価後の別段階とする。
+**Architecture（タスク6まで実装済み、統合実機ゲートは未完了）:** 音声のデコード・DSP・レート変換は制御されたワーカー上で処理し、最終ピーク制限済みPCMを有界キューへ渡す。AVAudioSourceNodeのコールバックは事前確保されたPCMの取り出しと片耳への出力に限定する。DSPをオフラインテストとアプリで共有し、システム音声取得は知覚評価後の別段階とする。
 
 **Tech Stack:** Swift、SwiftUI、Swift Package Manager、XCTest、AVFAudio、Core Audio。リアルタイム境界の有界キューと原子的な停止フラグのみタスク5で独立C11実装済み。タスク6でC render境界と再生workerを接続済み。
 
 **Spec:** [SPEC.md](../../../SPEC.md)、[AGENTS.md](../../../AGENTS.md)。本書は仕様の変更ではなく、実装順序と検証手順の具体化である。
 
-## 現在の進捗（2026-09-10）
+## 現在の進捗（2026-09-11、実装コミット `88b6ddd`）
 
-実装コミット`645ac38`時点でタスク1〜4を実装・検証済み。ホストは無音のみ。タスク5（有界キュー）は今回実装し、SwiftPM全94件・ASan/TSan各19件とReleaseビルドを確認済み。60分合成負荷のC render性能ゲートも確認済み。タスク6（再生統合）は2026-09-11に実装・自動検証済み。実機の音楽出力とcallback全体の検証が残るため、タスク6の受け入れ完了とはしない。タスク4の所有者解放修正時にはSwiftPM／Xcode各75テストとReleaseビルドが成功し、同修正後のUSB 48 kHz寿命検証も成功した。44.1 kHzプロファイルと物理的な切断・スリープの実績は修正前のもので、最新修正後には再実施していない。詳細と残る条件は[段階A検証記録](../../verification/stage-a.md)を参照。
+日付付きの個別実装記録は当時の履歴として残す。現在の進捗は本節と検証記録の最新状況を参照する。
+
+タスク1〜6の実装とタスク6レビュー指摘3件の修正をmainへマージ・push済み。アプリは明示操作でファイル再生・処理状態を保持するpause・stop・seek・共通経路の確認音を提供する。マージ後のSwiftPM 157テストとReleaseパッケージビルドが成功し、レビュー修正後のTSanはworker／Controller 47テスト、Xcode Releaseアプリビルドも成功した。作業ブランチと専用worktreeは削除済み。タスク6の実機受け入れは未完了で、タスク7以降・知覚評価・段階Bは未着手。過去のタスク4の無音機器検証やタスク5の60分合成負荷を、今回の統合音楽経路の実機合格へ代用しない。詳細は[段階A検証記録](../../verification/stage-a.md)を参照。
 
 以下の日付付き実装・レビュー記録は当時の状態を保存している。「未完了」「未検証」などの記述を現在の進捗として読まない。各タスクのチェックリストと本節が現在の進捗を示す。
 
@@ -348,9 +350,9 @@ MOQueueStats mo_queue_read_stats(const MOFrameQueue *q);
 
 **2026-09-11 実装記録:** 再生統合と最小UIを実装。自動検証結果と実機の未完了条件は[段階A検証記録](../../verification/stage-a.md)を参照。以下の実機を含む項目は未完了のままとする。
 
-**対象:** `PlaybackController.swift`、`DeviceOutput.swift`、`PlaybackControllerTests.swift`。対応: T5〜T9。
+**対象:** `PlaybackController.swift`、`PlaybackWorker.swift`、`DeviceOutput.swift`、C `RenderContext`、最小`PlayerView.swift`と対応テスト。対応: T5〜T9。
 
-**インターフェース:** `PlaybackController`は制御側で直列化する。`open(url:) async throws`、`play() async throws`、`pause()`、`stop()`、`seek(seconds:) async throws`、`selectOutput(uid:ear:)`、`set(mode:parameters:gainDB:)`。公開状態は`PlaybackPhase`、再生位置、相殺警告、エラーのみ。再生ワーカーとUIは同じEncoderを直接共有しない。
+**インターフェース:** `PlaybackController`は制御側で直列化する。`open(url:) async throws`、`play() async throws`、`pause()`、`stop()`、`seek(seconds:) async throws`、`selectOutput(uid:ear:)`、`set(mode:parameters:gainDB:)`。公開状態は`PlaybackPhase`、再生位置・長さ、チャンネル数、選択機器・耳、設定値、シーク可否、相殺警告、エラー。再生ワーカーとUIは同じEncoderを直接共有しない。
 
 - [x] 出力先をモックにして、準備中stop、open A→open B→Aの完了、seek中stop、切断直後の再開始、デコード失敗を再現するテストを先に追加する。
 - [x] ワーカーで`AudioFilePipeline`からキュー空き容量まで読み出す。キューへの部分書き込みをデータ欠落にしない。制御要求はブロック境界で適用し、DSP値を本試験中固定する仕組みもここに置く。

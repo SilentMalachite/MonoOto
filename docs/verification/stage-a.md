@@ -1,18 +1,19 @@
 # 段階A 検証記録
 
-## 最新状況（2026-09-10、基点HEAD `2929fa6`＋タスク5作業差分）
+## 最新状況（2026-09-11、実装コミット `88b6ddd`）
 
-タスク1〜4の検証に加え、タスク5の独立C11有界キューを実装・自動検証済み。60分合成負荷のC render性能ゲートも確認済み。アプリは無音ホストのままで、タスク6・音楽再生の統合・知覚評価は未着手。
+タスク6の再生統合とレビュー指摘3件の修正をmainへマージ・push済み。専用worktreeと作業ブランチは削除した。ファイル再生・pause・stop・seek・共通経路の確認音を実装し、自動検証を実施した。**統合した音楽経路の実機受け入れと知覚評価は未完了。**
 
 | 範囲 | 最新の確認と限界 |
 | --- | --- |
-| 自動テスト・ビルド | 今回SwiftPM 94件、Xcode既存75件、各Releaseビルド成功。キューのASan/TSan各19件成功。Xcodeには新規キュー試験を追加していない |
-| タスク4修正後の実機寿命 | USB 48 kHz・4周期、4状態のmain thread最終解放、render入口／出口計377回一致。所有者解放の処理が戻る前に停止・切り離し・状態解放を確認 |
-| 過去の実機・プロファイル | 機器固定、切断／再接続、既定出力変更、レート変更、スリープ、44.1／48 kHzプロファイルを確認済み。ただし最新のキャンセル・破棄修正より前の結果 |
-| 継続する制約 | 別スレッドでの所有者解放はMainActor実行待ちが残る。通常は明示stop／disposeを行う。最新修正後の44.1 kHz再プロファイル・物理的な切断／スリープ、macOS 14.2実機、60分負荷、音楽経路・知覚評価は未検証 |
+| マージ後のmain | SwiftPM 157テスト、失敗0。Releaseパッケージビルド成功。`88b6ddd`で実行 |
+| レビュー3件の修正後 | worker／ControllerのTSan 47テスト成功、Xcode Releaseアプリビルド成功。追加3回帰はRED→GREEN確認済み |
+| 修正前のタスク6検証 | SwiftPM 154件、Xcode host 127件、ASan／TSan各52件成功。3件のレビュー修正前であり、最終版の全ゲートを再実行した意味ではない |
+| PCM・寿命の自動検証 | 4レート組合せのpause PCM一致、file／tone・両耳・全モード・muteの64条件、ソフトウェア開始停止1000周期。物理出力の証拠ではない |
+| UI | 最小UIを実装。最新修正後の通し操作はファイル選択パネルを操作ツールで取得できず未完了。Controllerのモード補正・設定保持・seekは回帰で確認 |
+| 実機・性能 | 過去のタスク4の無音機器検証とタスク5の60分合成C負荷は履歴として保持。タスク6の物理pause／EOF末尾、切断・スリープ、100 ms供給停止、60分実音声、callback全体の計装、macOS 14.2実機、知覚評価は未検証 |
 
-以下は時系列の履歴であり、古い節の「未完了」「機器0件」「Git未管理」「非同期破棄」等は当時の実装・環境を示す。新しい結果で過去の測定を書き換えない。タスク4の最新修正証拠は2026-09-10「Grok指摘2」。今回のキュー実装と新たに実行した回帰・単体検証は末尾の「タスク5」に記録する。
-
+以下は時系列の履歴であり、「未コミット」「未着手」「機器0件」等は各実行時点の状況を示す。過去の測定を新しい結果で書き換えない。タスク6の実装・レビュー修正・mainへの統合記録は末尾に記載する。
 
 ## 2026-09-09 — タスク4：無音の機器固定ホスト
 
@@ -681,3 +682,18 @@ PYTHON
 別担当のread-only再監査で、resume／parkのticket順序、stop優先、mailboxと実行closureの所有上限、mono設定補正、確認音状態の解除を確認し、追加の確定不具合はなかった。再監査は静的確認で、テスト結果は主担当の実行に集約した。
 
 Releaseアプリの停止起動とL単独の選択を確認した。ただし今回の操作ツールではファイル選択パネルを取得できず、UIでmonoファイルを開く通し確認は未完了。mode補正・設定保持・seekはController回帰で実行済み。検証アプリは終了した。音声の実機出力、物理的pause／EOF、長時間実機ゲートの未検証状態は変わらない。コミット・merge・pushは行っていない。
+
+
+## 2026-09-11 — mainへの統合・公開と作業領域の整理
+
+実装と3件のレビュー修正を`88b6dddb0c32852dd52bb0bac68b7e0fe2ae2461`（`Integrate Task 6 playback and fix control regressions`）としてコミットした。26ファイルのみをstageし、mainへfast-forwardでマージした。`git push origin main`後、`git ls-remote --heads origin main`で同じSHAを確認した。安定版のリリースやアプリ配布を行った意味ではない。
+
+| 統合時の確認 | 結果 | `/private/tmp/` のログ |
+| --- | --- | --- |
+| コミット前の全SwiftPMテスト | 157 tests、0 failures | `monooto-task6-precommit.log` |
+| マージ後mainの全SwiftPMテスト | 157 tests、0 failures | `monooto-task6-postmerge-tests.log` |
+| マージ後mainのReleaseパッケージビルド | 成功 | `monooto-task6-postmerge-release.log` |
+
+マージ後のコマンドは`swift test --scratch-path /private/tmp/monooto-task6-main-verify`と`swift build -c release --scratch-path /private/tmp/monooto-task6-main-release`。これらは統合時に実行済みで、今回の文書更新時にはログとコミットを再確認した。
+
+利用者の指示に基づき、main／origin/mainとの同一SHA、作業ツリーに未保存変更がないこと、mainへの祖先関係を確認してから、専用worktreeと`codex/task6-playback`を通常の削除コマンドで削除した。強制削除は使用していない。元checkoutの未追跡計画・`graphify-out/`・`.ai-collab/`は保持した。過去節の専用worktreeパスは実行時の記録であり、現在そのディレクトリは存在しない。

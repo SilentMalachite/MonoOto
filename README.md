@@ -19,7 +19,9 @@ Implemented so far:
 - a short in-memory confirmation tone through the same processing path;
 - a minimal SwiftUI host and automated lifecycle/PCM tests.
 
-As of 2026-09-11, Task 6 playback integration is implemented. The app starts stopped; opening a file or changing its output never starts playback. Play and the confirmation tone require an explicit action and a selected device and ear. Pause retains the pipeline and queued PCM; stop and seek discard the old session.
+As of 2026-09-11, Task 6 playback integration and three review fixes are merged and pushed to `main` in commit `88b6ddd`. The app starts stopped; opening a file or changing its output never starts playback. Play and the confirmation tone require an explicit action and a selected device and ear. Pause retains the pipeline and queued PCM; stop and seek discard the old session.
+
+The latest post-merge SwiftPM run passed 157 tests, and the Release package build succeeded. The review fixes also passed 47 worker/controller tests under TSan and an Xcode Release app build. Earlier Xcode test and ASan results have different scopes and revisions; see the verification log rather than treating them as checks of the final revision.
 
 Task 6 is **not fully accepted**. Physical stop/pause/EOF continuity, disconnect/sleep behavior on the integrated audio path, a 60-minute device playback run, and the full callback allocation/lifetime profile remain unverified. macOS 14.2 hardware coverage and perceptual evaluation also remain open. The earlier Task 5 C-queue load test does not substitute for these checks. See the [verification log](docs/verification/stage-a.md) for current commands, results, and evidence limits. The finished settings UI and evaluation features remain later tasks.
 
@@ -52,6 +54,16 @@ xcodebuild \
 Opening `MonoOto.xcodeproj` in Xcode provides the minimal playback host. Do not treat a successful build or mocked test as proof that a physical device is pinned or stopped on disconnect.
 
 Playback owners should call `stop()` and then await `waitUntilSettled()` when their use ends. Stop closes the audio gate immediately; processing resources remain owned until producer and render ownership have ended. A last release off the main thread dispatches output teardown to MainActor. A blocked MainActor or hardware shutdown is not an immediate physical-silence guarantee.
+
+## Using the prototype
+
+1. Select the output device and listening ear; neither is selected at launch.
+2. Open a supported WAV/AIFF file. Opening it does not start playback.
+3. Press Play explicitly. Pause retains processing state; Stop returns to the beginning.
+4. Change modes, cue parameters, gain, or mute as needed. Opening mono material resets an incompatible L/R-only mode to normal mono while retaining the other settings.
+5. Use the seek slider for files. The confirmation tone uses the same processing path and does not support seeking; opening a file during the tone restores file seeking.
+
+The current UI is minimal. Settings persistence, the finished comparison/evaluation interface, and full VoiceOver validation remain later work. The latest UI automation could not access the file picker, so the complete post-fix UI sequence remains unverified; its controller behavior is covered by regression tests.
 
 ## Repository layout
 
